@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -40,7 +41,13 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+const (
+	DefaultDhcpOptionsId     = "default"
+	DefaultSecurityGroupName = "default"
 )
 
 // Client is a struct containing several clients for the different AWS services it needs to interact with.
@@ -62,6 +69,7 @@ type Client struct {
 	Route53RateLimiter            *rate.Limiter
 	Route53RateLimiterWaitTimeout time.Duration
 	Logger                        logr.Logger
+	PollInterval                  time.Duration
 }
 
 // NewInterface creates a new instance of Interface for the given AWS credentials and region.
@@ -96,6 +104,7 @@ func NewClient(accessKeyID, secretAccessKey, region string) (*Client, error) {
 		Route53RateLimiter:            rate.NewLimiter(rate.Inf, 0),
 		Route53RateLimiterWaitTimeout: 1 * time.Second,
 		Logger:                        log.Log.WithName("aws-client"),
+		PollInterval:                  5 * time.Second,
 	}, nil
 }
 
@@ -498,10 +507,879 @@ func (c *Client) ListKubernetesSecurityGroups(ctx context.Context, vpcID, cluste
 	return results, nil
 }
 
+func (c *Client) CreateVpcDhcpOptions(ctx context.Context, options *DhcpOptions) (*DhcpOptions, error) {
+	var newConfigs []*ec2.NewDhcpConfiguration
+
+	for key, values := range options.DhcpConfigurations {
+		newConfigs = append(newConfigs, &ec2.NewDhcpConfiguration{
+			Key:    aws.String(key),
+			Values: aws.StringSlice(values),
+		})
+	}
+	out, err := c.EC2.CreateDhcpOptionsWithContext(ctx, &ec2.CreateDhcpOptionsInput{
+		DhcpConfigurations: newConfigs,
+		TagSpecifications:  options.ToTagSpecifications(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return fromDhcpOptions(out.DhcpOptions), nil
+}
+
+func (c *Client) DeleteVpcDhcpOptions(ctx context.Context, id string) error {
+	_, err := c.EC2.DeleteDhcpOptionsWithContext(ctx, &ec2.DeleteDhcpOptionsInput{DhcpOptionsId: aws.String(id)})
+	return ignoreNotFound(err)
+}
+
+func (c *Client) DescribeVpcDhcpOptions(ctx context.Context, id *string, tags Tags) ([]*DhcpOptions, error) {
+	input := &ec2.DescribeDhcpOptionsInput{}
+	if id != nil {
+		input.DhcpOptionsIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeDhcpOptions(input)
+	if ignoreNotFound(err) != nil {
+		return nil, err
+	}
+	var options []*DhcpOptions
+	for _, item := range output.DhcpOptions {
+		options = append(options, fromDhcpOptions(item))
+	}
+	return options, nil
+}
+
+func (c *Client) CreateVpc(ctx context.Context, vpc *VPC) (*VPC, error) {
+	input := &ec2.CreateVpcInput{
+		CidrBlock:         aws.String(vpc.CidrBlock),
+		InstanceTenancy:   nil,
+		TagSpecifications: vpc.ToTagSpecifications(),
+	}
+	output, err := c.EC2.CreateVpc(input)
+	if err != nil {
+		return nil, err
+	}
+	vpsList, err := c.DescribeVpcs(ctx, output.Vpc.VpcId, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(vpsList) != 1 {
+		return nil, fmt.Errorf("vpc %s not found", *output.Vpc.VpcId)
+	}
+	updatedVpc, err := c.updateVpcAttributes(ctx, vpc, vpsList[0])
+	if err != nil {
+		return updatedVpc, err
+	}
+	if vpc.DhcpOptionsId != nil {
+		if err := c.addVpcDhcpOptionAssociation(vpc.VpcId, vpc.DhcpOptionsId); err != nil {
+			updatedVpc.DhcpOptionsId = nil
+			return updatedVpc, err
+		}
+	}
+	return updatedVpc, nil
+}
+
+func (c *Client) UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error) {
+	if desired.CidrBlock != current.CidrBlock {
+		return nil, fmt.Errorf("cannot change CIDR block")
+	}
+	new, err := c.updateVpcAttributes(ctx, desired, current)
+	if err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(desired.DhcpOptionsId, current.DhcpOptionsId) {
+		if err := c.addVpcDhcpOptionAssociation(current.VpcId, desired.DhcpOptionsId); err != nil {
+			return nil, err
+		}
+		new.DhcpOptionsId = desired.DhcpOptionsId
+	}
+	return new, nil
+}
+
+func (c *Client) updateVpcAttributes(ctx context.Context, desired, current *VPC) (*VPC, error) {
+	new := *current
+	if desired.EnableDnsSupport != current.EnableDnsSupport {
+		input := &ec2.ModifyVpcAttributeInput{
+			EnableDnsSupport: &ec2.AttributeBooleanValue{
+				Value: aws.Bool(desired.EnableDnsSupport),
+			},
+			VpcId: aws.String(current.VpcId),
+		}
+		if _, err := c.EC2.ModifyVpcAttribute(input); err != nil {
+			return nil, err
+		}
+		if err := c.Wait(ctx, func(ctx context.Context) (bool, error) {
+			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(current.VpcId), ec2.VpcAttributeNameEnableDnsSupport)
+			return b == desired.EnableDnsSupport, err
+		}); err != nil {
+			return nil, err
+		}
+		new.EnableDnsSupport = desired.EnableDnsSupport
+	}
+	if desired.EnableDnsHostnames != current.EnableDnsHostnames {
+		input := &ec2.ModifyVpcAttributeInput{
+			EnableDnsHostnames: &ec2.AttributeBooleanValue{
+				Value: aws.Bool(desired.EnableDnsHostnames),
+			},
+			VpcId: aws.String(current.VpcId),
+		}
+		if _, err := c.EC2.ModifyVpcAttribute(input); err != nil {
+			return nil, err
+		}
+		if err := c.Wait(ctx, func(ctx context.Context) (bool, error) {
+			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(current.VpcId), ec2.VpcAttributeNameEnableDnsHostnames)
+			return b == desired.EnableDnsHostnames, err
+		}); err != nil {
+			return nil, err
+		}
+		new.EnableDnsHostnames = desired.EnableDnsHostnames
+	}
+	return &new, nil
+}
+
+func (c *Client) addVpcDhcpOptionAssociation(vpcId string, dhcpOptionsId *string) error {
+	if dhcpOptionsId == nil {
+		// AWS does not provide an API to disassociate a DHCP Options set from a VPC.
+		// So, we do this by setting the VPC to the default DHCP Options Set.
+		id := DefaultDhcpOptionsId
+		dhcpOptionsId = &id
+	}
+	_, err := c.EC2.AssociateDhcpOptions(&ec2.AssociateDhcpOptionsInput{
+		DhcpOptionsId: dhcpOptionsId,
+		VpcId:         aws.String(vpcId),
+	})
+	return err
+}
+
+func (c *Client) DeleteVpc(ctx context.Context, id string) error {
+	_, err := c.EC2.DeleteVpcWithContext(ctx, &ec2.DeleteVpcInput{VpcId: aws.String(id)})
+	return ignoreNotFound(err)
+}
+
+func (c *Client) DescribeVpcs(ctx context.Context, id *string, tags Tags) ([]*VPC, error) {
+	input := &ec2.DescribeVpcsInput{}
+	if id != nil {
+		input.VpcIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeVpcs(input)
+	if ignoreNotFound(err) != nil {
+		return nil, err
+	}
+	var vpcList []*VPC
+	for _, item := range output.Vpcs {
+		vpc, err := c.fromVpc(ctx, item, true)
+		if err != nil {
+			return nil, err
+		}
+		vpcList = append(vpcList, vpc)
+	}
+	return vpcList, nil
+}
+
+func (c *Client) fromVpc(ctx context.Context, item *ec2.Vpc, withAttributes bool) (*VPC, error) {
+	vpc := &VPC{
+		VpcId:         aws.StringValue(item.VpcId),
+		Tags:          FromTags(item.Tags),
+		CidrBlock:     aws.StringValue(item.CidrBlock),
+		DhcpOptionsId: item.DhcpOptionsId,
+	}
+	var err error
+	if withAttributes {
+		if vpc.EnableDnsHostnames, err = c.describeVpcAttributeWithContext(ctx, item.VpcId, ec2.VpcAttributeNameEnableDnsHostnames); err != nil {
+			return nil, err
+		}
+		if vpc.EnableDnsSupport, err = c.describeVpcAttributeWithContext(ctx, item.VpcId, ec2.VpcAttributeNameEnableDnsSupport); err != nil {
+			return nil, err
+		}
+	}
+	return vpc, nil
+}
+
+func (c *Client) describeVpcAttributeWithContext(ctx context.Context, vpcId *string, attributeName string) (bool, error) {
+	output, err := c.EC2.DescribeVpcAttributeWithContext(ctx, &ec2.DescribeVpcAttributeInput{
+		Attribute: aws.String(attributeName),
+		VpcId:     vpcId,
+	})
+	if err != nil {
+		return false, err
+	}
+	switch attributeName {
+	case ec2.VpcAttributeNameEnableDnsHostnames:
+		return *output.EnableDnsHostnames.Value, nil
+	case ec2.VpcAttributeNameEnableDnsSupport:
+		return *output.EnableDnsSupport.Value, nil
+	default:
+		return false, fmt.Errorf("unknown attribute: %s", attributeName)
+	}
+}
+
+func (c *Client) CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error) {
+	input := &ec2.CreateSecurityGroupInput{
+		GroupName:         aws.String(sg.GroupName),
+		TagSpecifications: sg.ToTagSpecifications(),
+		VpcId:             sg.VpcId,
+		Description:       sg.Description,
+	}
+	output, err := c.EC2.CreateSecurityGroupWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	created := *sg
+	created.Rules = nil
+	created.GroupId = *output.GroupId
+	if err = c.updateSecurityGroupRules(ctx, sg); err != nil {
+		return &created, err
+	}
+	for _, rule := range sg.Rules {
+		r := *rule
+		created.Rules = append(created.Rules, &r)
+	}
+	return &created, nil
+}
+
+func (c *Client) updateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error {
+	inputIngress := &ec2.UpdateSecurityGroupRuleDescriptionsIngressInput{
+		GroupId: aws.String(sg.GroupId),
+	}
+	inputEgress := &ec2.UpdateSecurityGroupRuleDescriptionsEgressInput{
+		GroupId: aws.String(sg.GroupId),
+	}
+	for _, rule := range sg.Rules {
+		ipPerm := &ec2.IpPermission{
+			IpProtocol:       aws.String(rule.Protocol),
+			IpRanges:         nil,
+			PrefixListIds:    nil,
+			UserIdGroupPairs: nil,
+		}
+		if rule.FromPort != 0 {
+			ipPerm.FromPort = aws.Int64(int64(rule.FromPort))
+		}
+		if rule.ToPort != 0 {
+			ipPerm.ToPort = aws.Int64(int64(rule.ToPort))
+		}
+		for _, block := range rule.CidrBlocks {
+			ipPerm.IpRanges = append(ipPerm.IpRanges, &ec2.IpRange{CidrIp: aws.String(block)})
+		}
+		switch rule.Type {
+		case SecurityGroupRuleTypeIngress:
+			inputIngress.IpPermissions = append(inputIngress.IpPermissions, ipPerm)
+		case SecurityGroupRuleTypeEgress:
+			inputEgress.IpPermissions = append(inputEgress.IpPermissions, ipPerm)
+		default:
+			return fmt.Errorf("unknown security group rule type: %s", rule.Type)
+		}
+	}
+	if _, err := c.EC2.UpdateSecurityGroupRuleDescriptionsIngressWithContext(ctx, inputIngress); err != nil {
+		return err
+	}
+	if _, err := c.EC2.UpdateSecurityGroupRuleDescriptionsEgressWithContext(ctx, inputEgress); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) DescribeSecurityGroups(ctx context.Context, id *string, tags Tags) ([]*SecurityGroup, error) {
+	input := &ec2.DescribeSecurityGroupsInput{}
+	if id != nil {
+		input.GroupIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeSecurityGroupsWithContext(ctx, input)
+	if ignoreNotFound(err) != nil {
+		return nil, err
+	}
+	var sgList []*SecurityGroup
+	for _, item := range output.SecurityGroups {
+		sg := &SecurityGroup{
+			Tags:        FromTags(item.Tags),
+			GroupId:     aws.StringValue(item.GroupId),
+			GroupName:   aws.StringValue(item.GroupName),
+			VpcId:       item.VpcId,
+			Description: item.Description,
+		}
+		for _, ipPerm := range item.IpPermissions {
+			rule := fromIpPermission(ipPerm, SecurityGroupRuleTypeIngress)
+			sg.Rules = append(sg.Rules, rule)
+		}
+		sgList = append(sgList, sg)
+	}
+	return sgList, nil
+}
+
+func (c *Client) ModifySecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error) {
+	if err := c.updateSecurityGroupRules(ctx, sg); err != nil {
+		return nil, err
+	}
+	list, err := c.DescribeSecurityGroups(ctx, &sg.GroupId, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) != 1 {
+		return nil, fmt.Errorf("security group %s not found", sg.GroupId)
+	}
+	return list[0], nil
+}
+
 // DeleteSecurityGroup deletes the security group with the specific <id>. If it does not exist, no error is returned.
 func (c *Client) DeleteSecurityGroup(ctx context.Context, id string) error {
 	_, err := c.EC2.DeleteSecurityGroupWithContext(ctx, &ec2.DeleteSecurityGroupInput{GroupId: aws.String(id)})
 	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateInternetGateway(ctx context.Context, gateway *InternetGateway) (*InternetGateway, error) {
+	input := &ec2.CreateInternetGatewayInput{
+		TagSpecifications: gateway.ToTagSpecifications(),
+	}
+	output, err := c.EC2.CreateInternetGatewayWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	created := &InternetGateway{
+		Tags:              FromTags(output.InternetGateway.Tags),
+		InternetGatewayId: aws.StringValue(output.InternetGateway.InternetGatewayId),
+	}
+	attachInput := &ec2.AttachInternetGatewayInput{
+		InternetGatewayId: output.InternetGateway.InternetGatewayId,
+		VpcId:             aws.String(gateway.VpcId),
+	}
+	_, err = c.EC2.AttachInternetGatewayWithContext(ctx, attachInput)
+	if err != nil {
+		return created, err
+	}
+	created.VpcId = gateway.VpcId
+	return created, nil
+}
+
+func (c *Client) DescribeInternetGateways(ctx context.Context, id *string, tags Tags) ([]*InternetGateway, error) {
+	input := &ec2.DescribeInternetGatewaysInput{}
+	if id != nil {
+		input.InternetGatewayIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeInternetGateways(input)
+	if err != nil {
+		return nil, err
+	}
+	var gateways []*InternetGateway
+	for _, item := range output.InternetGateways {
+		gw := &InternetGateway{
+			Tags:              FromTags(item.Tags),
+			InternetGatewayId: aws.StringValue(item.InternetGatewayId),
+		}
+		for _, attachment := range item.Attachments {
+			gw.VpcId = aws.StringValue(attachment.VpcId)
+			break
+		}
+	}
+	return gateways, nil
+}
+
+func (c *Client) DeleteInternetGateway(ctx context.Context, id string) error {
+	input := &ec2.DeleteInternetGatewayInput{
+		InternetGatewayId: aws.String(id),
+	}
+	_, err := c.EC2.DeleteInternetGatewayWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateVpcEndpoint(ctx context.Context, endpoint *VpcEndpoint) (*VpcEndpoint, error) {
+	input := &ec2.CreateVpcEndpointInput{
+		ServiceName:       aws.String(endpoint.ServiceName),
+		TagSpecifications: endpoint.ToTagSpecifications(),
+		VpcId:             aws.String(endpoint.VpcId),
+	}
+	output, err := c.EC2.CreateVpcEndpointWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return &VpcEndpoint{
+		Tags:          FromTags(output.VpcEndpoint.Tags),
+		VpcEndpointId: aws.StringValue(output.VpcEndpoint.VpcEndpointId),
+		VpcId:         aws.StringValue(output.VpcEndpoint.VpcId),
+		ServiceName:   aws.StringValue(output.VpcEndpoint.ServiceName),
+	}, nil
+}
+
+func (c *Client) DescribeVpcEndpoints(ctx context.Context, id *string, tags Tags) ([]*VpcEndpoint, error) {
+	input := &ec2.DescribeVpcEndpointsInput{}
+	if id != nil {
+		input.VpcEndpointIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeVpcEndpointsWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var endpoints []*VpcEndpoint
+	for _, item := range output.VpcEndpoints {
+		endpoint := &VpcEndpoint{
+			Tags:          FromTags(item.Tags),
+			VpcEndpointId: aws.StringValue(item.VpcEndpointId),
+			VpcId:         aws.StringValue(item.VpcId),
+			ServiceName:   aws.StringValue(item.ServiceName),
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	return endpoints, nil
+}
+
+func (c *Client) DeleteVpcEndpoint(ctx context.Context, id string) error {
+	input := &ec2.DeleteVpcEndpointsInput{
+		VpcEndpointIds: []*string{&id},
+	}
+	_, err := c.EC2.DeleteVpcEndpointsWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateRouteTable(ctx context.Context, routeTable *RouteTable) (*RouteTable, error) {
+	input := &ec2.CreateRouteTableInput{
+		TagSpecifications: routeTable.ToTagSpecifications(),
+		VpcId:             aws.String(routeTable.VpcId),
+	}
+	output, err := c.EC2.CreateRouteTableWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	created := &RouteTable{
+		Tags:         FromTags(output.RouteTable.Tags),
+		RouteTableId: aws.StringValue(output.RouteTable.RouteTableId),
+		VpcId:        aws.StringValue(output.RouteTable.VpcId),
+	}
+
+	return created, nil
+}
+
+func (c *Client) createRoute(ctx context.Context, routeTableId string, route *Route) error {
+	input := &ec2.CreateRouteInput{
+		DestinationCidrBlock: aws.String(route.DestinationCidrBlock),
+		GatewayId:            route.GatewayId,
+		NatGatewayId:         route.NatGatewayId,
+		RouteTableId:         aws.String(routeTableId),
+	}
+	_, err := c.EC2.CreateRouteWithContext(ctx, input)
+	return err
+}
+
+func (c *Client) deleteRoute(ctx context.Context, routeTableId string, route *Route) error {
+	input := &ec2.DeleteRouteInput{
+		DestinationCidrBlock: aws.String(route.DestinationCidrBlock),
+		RouteTableId:         aws.String(routeTableId),
+	}
+	_, err := c.EC2.DeleteRouteWithContext(ctx, input)
+	return err
+}
+
+func (c *Client) UpdateRouteTable(ctx context.Context, desired, current *RouteTable) (*RouteTable, error) {
+outerDelete:
+	for _, cr := range current.Routes {
+		for _, dr := range desired.Routes {
+			if reflect.DeepEqual(cr, dr) {
+				continue outerDelete
+			}
+		}
+		if err := c.deleteRoute(ctx, current.RouteTableId, cr); err != nil {
+			return nil, err
+		}
+	}
+outerCreate:
+	for _, dr := range desired.Routes {
+		for _, cr := range current.Routes {
+			if reflect.DeepEqual(cr, dr) {
+				continue outerCreate
+			}
+		}
+		if err := c.createRoute(ctx, current.RouteTableId, dr); err != nil {
+			return nil, err
+		}
+	}
+	updated := *current
+	updated.Routes = nil
+	for _, dr := range desired.Routes {
+		updated.Routes = append(updated.Routes, dr)
+	}
+	return &updated, nil
+}
+
+func (c *Client) DescribeRouteTables(ctx context.Context, id *string, tags Tags) ([]*RouteTable, error) {
+	input := &ec2.DescribeRouteTablesInput{}
+	if id != nil {
+		input.RouteTableIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeRouteTablesWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var tables []*RouteTable
+	for _, item := range output.RouteTables {
+		table := &RouteTable{
+			Tags:         FromTags(item.Tags),
+			RouteTableId: aws.StringValue(item.RouteTableId),
+			VpcId:        aws.StringValue(item.VpcId),
+		}
+		tables = append(tables, table)
+	}
+	return tables, nil
+}
+
+func (c *Client) DeleteRouteTable(ctx context.Context, id string) error {
+	input := &ec2.DeleteRouteTableInput{
+		RouteTableId: aws.String(id),
+	}
+	_, err := c.EC2.DeleteRouteTableWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, error) {
+	input := &ec2.CreateSubnetInput{
+		AvailabilityZone:  aws.String(subnet.AvailabilityZone),
+		CidrBlock:         aws.String(subnet.CidrBlock),
+		TagSpecifications: subnet.ToTagSpecifications(),
+		VpcId:             aws.String(subnet.VpcId),
+	}
+	output, err := c.EC2.CreateSubnetWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return fromSubnet(output.Subnet), nil
+}
+
+func (c *Client) DescribeSubnets(ctx context.Context, id *string, tags Tags) ([]*Subnet, error) {
+	input := &ec2.DescribeSubnetsInput{}
+	if id != nil {
+		input.SubnetIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeSubnetsWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var subnets []*Subnet
+	for _, item := range output.Subnets {
+		subnets = append(subnets, fromSubnet(item))
+	}
+	return subnets, nil
+}
+
+func (c *Client) DeleteSubnet(ctx context.Context, id string) error {
+	input := &ec2.DeleteSubnetInput{
+		SubnetId: aws.String(id),
+	}
+	_, err := c.EC2.DeleteSubnetWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateElasticIP(ctx context.Context, eip *ElasticIP) (*ElasticIP, error) {
+	domainOpt := ""
+	if eip.Vpc {
+		domainOpt = ec2.DomainTypeVpc
+	}
+	input := &ec2.AllocateAddressInput{
+		Domain:            aws.String(domainOpt),
+		TagSpecifications: eip.ToTagSpecifications(),
+	}
+	output, err := c.EC2.AllocateAddressWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return &ElasticIP{
+		Tags:         eip.Tags.Clone(),
+		Vpc:          eip.Vpc,
+		AllocationId: aws.StringValue(output.AllocationId),
+		PublicIp:     aws.StringValue(output.PublicIp),
+	}, nil
+}
+
+func (c *Client) DescribeElasticIPs(ctx context.Context, id *string, tags Tags) ([]*ElasticIP, error) {
+	input := &ec2.DescribeAddressesInput{}
+	if id != nil {
+		input.AllocationIds = []*string{id}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeAddressesWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var eips []*ElasticIP
+	for _, item := range output.Addresses {
+		eips = append(eips, fromAddress(item))
+	}
+	return eips, nil
+}
+
+func (c *Client) DeleteElasticIP(ctx context.Context, id string) error {
+	input := &ec2.ReleaseAddressInput{
+		AllocationId: aws.String(id),
+	}
+	_, err := c.EC2.ReleaseAddressWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NATGateway, error) {
+	input := &ec2.CreateNatGatewayInput{
+		AllocationId:      aws.String(gateway.EIPAllocationId),
+		SubnetId:          aws.String(gateway.SubnetId),
+		TagSpecifications: gateway.ToTagSpecifications(),
+	}
+	output, err := c.EC2.CreateNatGatewayWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return fromNatGateway(output.NatGateway), nil
+}
+
+func (c *Client) DescribeNATGateways(ctx context.Context, id *string, tags Tags) ([]*NATGateway, error) {
+	input := &ec2.DescribeNatGatewaysInput{}
+	if id != nil {
+		input.NatGatewayIds = []*string{id}
+	} else {
+		input.Filter = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeNatGatewaysWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var gateways []*NATGateway
+	for _, item := range output.NatGateways {
+		gateways = append(gateways, fromNatGateway(item))
+	}
+	return gateways, nil
+}
+
+func (c *Client) DeleteNATGateway(ctx context.Context, id string) error {
+	input := &ec2.DeleteNatGatewayInput{
+		NatGatewayId: aws.String(id),
+	}
+	_, err := c.EC2.DeleteNatGatewayWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) ImportKeyPair(ctx context.Context, keyName string, publicKey []byte, tags Tags) (*KeyPairInfo, error) {
+	input := &ec2.ImportKeyPairInput{
+		KeyName:           aws.String(keyName),
+		PublicKeyMaterial: publicKey,
+		TagSpecifications: tags.ToTagSpecifications(),
+	}
+	output, err := c.EC2.ImportKeyPairWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return &KeyPairInfo{
+		Tags:           FromTags(output.Tags),
+		KeyName:        aws.StringValue(output.KeyName),
+		KeyFingerprint: aws.StringValue(output.KeyFingerprint),
+	}, nil
+}
+
+func (c *Client) DescribeKeyPairs(ctx context.Context, keyName *string, tags Tags) ([]*KeyPairInfo, error) {
+	input := &ec2.DescribeKeyPairsInput{}
+	if keyName != nil {
+		input.KeyNames = []*string{keyName}
+	} else {
+		input.Filters = tags.ToFilters()
+	}
+	output, err := c.EC2.DescribeKeyPairsWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var pairs []*KeyPairInfo
+	for _, item := range output.KeyPairs {
+		pairs = append(pairs, fromKeyPairInfo(item))
+	}
+	return pairs, nil
+}
+
+func (c *Client) DeleteKeyPair(ctx context.Context, keyName string) error {
+	input := &ec2.DeleteKeyPairInput{
+		KeyName: aws.String(keyName),
+	}
+	_, err := c.EC2.DeleteKeyPairWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateRouteTableAssociation(ctx context.Context, routeTableId, subnetId string) (*string, error) {
+	input := &ec2.AssociateRouteTableInput{
+		RouteTableId: aws.String(routeTableId),
+		SubnetId:     aws.String(subnetId),
+	}
+	output, err := c.EC2.AssociateRouteTableWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return output.AssociationId, nil
+}
+
+func (c *Client) DeleteRouteTableAssociation(ctx context.Context, associationId string) error {
+	input := &ec2.DisassociateRouteTableInput{
+		AssociationId: aws.String(associationId),
+	}
+	_, err := c.EC2.DisassociateRouteTableWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateIAMRole(ctx context.Context, role *IAMRole) (*IAMRole, error) {
+	input := &iam.CreateRoleInput{
+		AssumeRolePolicyDocument: aws.String(role.AssumeRolePolicyDocument),
+		Path:                     aws.String(role.Path),
+		RoleName:                 aws.String(role.RoleName),
+		Tags:                     role.ToIAMTags(),
+	}
+	output, err := c.IAM.CreateRoleWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return fromIAMRole(output.Role), nil
+}
+
+func (c *Client) GetIAMRole(ctx context.Context, roleName string) (*IAMRole, error) {
+	input := &iam.GetRoleInput{
+		RoleName: aws.String(roleName),
+	}
+	output, err := c.IAM.GetRoleWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return fromIAMRole(output.Role), nil
+}
+
+func (c *Client) DeleteIAMRole(ctx context.Context, roleName string) error {
+	input := &iam.DeleteRoleInput{
+		RoleName: aws.String(roleName),
+	}
+	_, err := c.IAM.DeleteRoleWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateIAMInstanceProfile(ctx context.Context, profile *IAMInstanceProfile) (*IAMInstanceProfile, error) {
+	input := &iam.CreateInstanceProfileInput{
+		InstanceProfileName: aws.String(profile.InstanceProfileName),
+		Path:                aws.String(profile.Path),
+		Tags:                profile.ToIAMTags(),
+	}
+	output, err := c.IAM.CreateInstanceProfileWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	profileName := aws.StringValue(output.InstanceProfile.InstanceProfileName)
+	if err = c.Wait(ctx, func(ctx context.Context) (done bool, err error) {
+		if item, err := c.GetIAMInstanceProfile(ctx, profileName); err != nil {
+			return false, err
+		} else {
+			return item != nil, nil
+		}
+	}); err != nil {
+		return nil, err
+	}
+	created := *profile
+	created.RoleName = ""
+	if err = c.addRoleToIAMInstanceProfile(ctx, profileName, profile.RoleName); err != nil {
+		return &created, err
+	}
+	return c.GetIAMInstanceProfile(ctx, profileName)
+}
+
+func (c *Client) GetIAMInstanceProfile(ctx context.Context, profileName string) (*IAMInstanceProfile, error) {
+	input := &iam.GetInstanceProfileInput{
+		InstanceProfileName: aws.String(profileName),
+	}
+	output, err := c.IAM.GetInstanceProfileWithContext(ctx, input)
+	if err != nil {
+		if IsNotFoundError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return fromIAMInstanceProfile(output.InstanceProfile), nil
+}
+
+func (c *Client) UpdateIAMInstanceProfile(ctx context.Context, desired, current *IAMInstanceProfile) (*IAMInstanceProfile, error) {
+	if current.RoleName == desired.RoleName {
+		return current, nil
+	}
+	if desired.RoleName != "" {
+		if err := c.addRoleToIAMInstanceProfile(ctx, current.InstanceProfileName, desired.RoleName); err != nil {
+			return nil, err
+		}
+	}
+	if current.RoleName != "" {
+		if err := c.removeRoleFromIAMInstanceProfile(ctx, current.InstanceProfileName, current.RoleName); err != nil {
+			return nil, err
+		}
+	}
+	return c.GetIAMInstanceProfile(ctx, current.InstanceProfileName)
+}
+
+func (c *Client) addRoleToIAMInstanceProfile(ctx context.Context, profileName, roleName string) error {
+	input := &iam.AddRoleToInstanceProfileInput{
+		InstanceProfileName: aws.String(profileName),
+		RoleName:            aws.String(roleName),
+	}
+	_, err := c.IAM.AddRoleToInstanceProfileWithContext(ctx, input)
+	return err
+}
+
+func (c *Client) removeRoleFromIAMInstanceProfile(ctx context.Context, profileName, roleName string) error {
+	input := &iam.RemoveRoleFromInstanceProfileInput{
+		InstanceProfileName: aws.String(profileName),
+		RoleName:            aws.String(roleName),
+	}
+	_, err := c.IAM.RemoveRoleFromInstanceProfileWithContext(ctx, input)
+	return err
+}
+
+func (c *Client) DeleteIAMInstanceProfile(ctx context.Context, profileName string) error {
+	input := &iam.DeleteInstanceProfileInput{
+		InstanceProfileName: aws.String(profileName),
+	}
+	_, err := c.IAM.DeleteInstanceProfileWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) PutIAMRolePolicy(ctx context.Context, policy *IAMRolePolicy) error {
+	input := &iam.PutRolePolicyInput{
+		PolicyDocument: aws.String(policy.PolicyDocument),
+		PolicyName:     aws.String(policy.PolicyName),
+		RoleName:       aws.String(policy.RoleName),
+	}
+	_, err := c.IAM.PutRolePolicyWithContext(ctx, input)
+	return err
+}
+
+func (c *Client) GetIAMRolePolicy(ctx context.Context, policyName, roleName string) (*IAMRolePolicy, error) {
+	input := &iam.GetRolePolicyInput{
+		PolicyName: aws.String(policyName),
+		RoleName:   aws.String(roleName),
+	}
+	output, err := c.IAM.GetRolePolicyWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return &IAMRolePolicy{
+		PolicyName:     aws.StringValue(output.PolicyName),
+		RoleName:       aws.StringValue(output.RoleName),
+		PolicyDocument: aws.StringValue(output.PolicyDocument),
+	}, nil
+}
+
+func (c *Client) DeleteIAMRolePolicy(ctx context.Context, policyName, roleName string) error {
+	input := &iam.DeleteRolePolicyInput{
+		PolicyName: aws.String(policyName),
+		RoleName:   aws.String(roleName),
+	}
+	_, err := c.IAM.DeleteRolePolicyWithContext(ctx, input)
+	return ignoreNotFound(err)
+}
+
+func (c *Client) Wait(ctx context.Context, condition wait.ConditionWithContextFunc) error {
+	return wait.PollImmediateUntilWithContext(ctx, c.PollInterval, condition)
 }
 
 // IsNotFoundError returns true if the given error is a awserr.Error indicating that a AWS resource was not found.
@@ -532,4 +1410,107 @@ func chunkSlice(slice []*string, chunkSize int) [][]*string {
 	}
 
 	return chunks
+}
+
+func fromDhcpOptions(item *ec2.DhcpOptions) *DhcpOptions {
+	config := map[string][]string{}
+	for _, cfg := range item.DhcpConfigurations {
+		var values []string
+		for _, av := range cfg.Values {
+			values = append(values, *av.Value)
+		}
+		config[*cfg.Key] = values
+	}
+	return &DhcpOptions{
+		Tags:               FromTags(item.Tags),
+		DhcpOptionsId:      aws.StringValue(item.DhcpOptionsId),
+		DhcpConfigurations: config,
+	}
+}
+
+func fromIpPermission(ipPerm *ec2.IpPermission, ruleType SecurityGroupRuleType) *SecurityGroupRule {
+	var blocks []string
+	for _, block := range ipPerm.IpRanges {
+		blocks = append(blocks, *block.CidrIp)
+	}
+	rule := &SecurityGroupRule{
+		Type:       ruleType,
+		Protocol:   aws.StringValue(ipPerm.IpProtocol),
+		CidrBlocks: blocks,
+	}
+	if ipPerm.FromPort != nil {
+		rule.FromPort = int(*ipPerm.FromPort)
+	}
+	if ipPerm.ToPort != nil {
+		rule.ToPort = int(*ipPerm.ToPort)
+	}
+	return rule
+}
+
+func fromSubnet(item *ec2.Subnet) *Subnet {
+	return &Subnet{
+		Tags:             FromTags(item.Tags),
+		SubnetId:         aws.StringValue(item.SubnetId),
+		VpcId:            aws.StringValue(item.VpcId),
+		AvailabilityZone: aws.StringValue(item.AvailabilityZone),
+		CidrBlock:        aws.StringValue(item.CidrBlock),
+	}
+}
+
+func fromAddress(item *ec2.Address) *ElasticIP {
+	return &ElasticIP{
+		Tags:         FromTags(item.Tags),
+		Vpc:          aws.StringValue(item.Domain) == ec2.DomainTypeVpc,
+		AllocationId: aws.StringValue(item.AllocationId),
+		PublicIp:     aws.StringValue(item.PublicIp),
+	}
+}
+
+func fromNatGateway(item *ec2.NatGateway) *NATGateway {
+	var allocationId, publicIP string
+	for _, address := range item.NatGatewayAddresses {
+		allocationId = aws.StringValue(address.AllocationId)
+		publicIP = aws.StringValue(address.PublicIp)
+		break
+	}
+	return &NATGateway{
+		Tags:            FromTags(item.Tags),
+		NATGatewayId:    aws.StringValue(item.NatGatewayId),
+		EIPAllocationId: allocationId,
+		PublicIP:        publicIP,
+		SubnetId:        aws.StringValue(item.SubnetId),
+	}
+}
+
+func fromKeyPairInfo(item *ec2.KeyPairInfo) *KeyPairInfo {
+	return &KeyPairInfo{
+		Tags:           FromTags(item.Tags),
+		KeyName:        aws.StringValue(item.KeyName),
+		KeyFingerprint: aws.StringValue(item.KeyFingerprint),
+	}
+}
+
+func fromIAMRole(item *iam.Role) *IAMRole {
+	return &IAMRole{
+		Tags:                     FromIAMTags(item.Tags),
+		RoleId:                   aws.StringValue(item.RoleId),
+		RoleName:                 aws.StringValue(item.RoleName),
+		Path:                     aws.StringValue(item.Path),
+		AssumeRolePolicyDocument: aws.StringValue(item.AssumeRolePolicyDocument),
+	}
+}
+
+func fromIAMInstanceProfile(item *iam.InstanceProfile) *IAMInstanceProfile {
+	var roleName string
+	for _, role := range item.Roles {
+		roleName = aws.StringValue(role.RoleName)
+		break
+	}
+	return &IAMInstanceProfile{
+		Tags:                FromIAMTags(item.Tags),
+		InstanceProfileId:   aws.StringValue(item.InstanceProfileId),
+		InstanceProfileName: aws.StringValue(item.InstanceProfileName),
+		Path:                aws.StringValue(item.Path),
+		RoleName:            roleName,
+	}
 }
