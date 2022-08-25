@@ -58,9 +58,10 @@ type Interface interface {
 
 	// VPCs
 	CreateVpcDhcpOptions(ctx context.Context, options *DhcpOptions) (*DhcpOptions, error)
-	DeleteVpcDhcpOptions(ctx context.Context, id string) error
 	DescribeVpcDhcpOptions(ctx context.Context, id *string, tags Tags) ([]*DhcpOptions, error)
+	DeleteVpcDhcpOptions(ctx context.Context, id string) error
 	CreateVpc(ctx context.Context, vpc *VPC) (*VPC, error)
+	UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error)
 	DeleteVpc(ctx context.Context, id string) error
 	DescribeVpcs(ctx context.Context, id *string, tags Tags) ([]*VPC, error)
 
@@ -125,6 +126,10 @@ type Interface interface {
 	PutIAMRolePolicy(ctx context.Context, policy *IAMRolePolicy) error
 	GetIAMRolePolicy(ctx context.Context, policyName, roleName string) (*IAMRolePolicy, error)
 	DeleteIAMRolePolicy(ctx context.Context, policyName, roleName string) error
+
+	// EC2 tags
+	CreateEC2Tags(ctx context.Context, resources []string, tags Tags) error
+	DeleteEC2Tags(ctx context.Context, resources []string, tags Tags) error
 }
 
 // Factory creates instances of Interface.

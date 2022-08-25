@@ -50,6 +50,20 @@ func (mr *MockInterfaceMockRecorder) CreateBucketIfNotExists(arg0, arg1, arg2 in
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateBucketIfNotExists", reflect.TypeOf((*MockInterface)(nil).CreateBucketIfNotExists), arg0, arg1, arg2)
 }
 
+// CreateEC2Tags mocks base method.
+func (m *MockInterface) CreateEC2Tags(arg0 context.Context, arg1 []string, arg2 client.Tags) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateEC2Tags", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateEC2Tags indicates an expected call of CreateEC2Tags.
+func (mr *MockInterfaceMockRecorder) CreateEC2Tags(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateEC2Tags", reflect.TypeOf((*MockInterface)(nil).CreateEC2Tags), arg0, arg1, arg2)
+}
+
 // CreateElasticIP mocks base method.
 func (m *MockInterface) CreateElasticIP(arg0 context.Context, arg1 *client.ElasticIP) (*client.ElasticIP, error) {
 	m.ctrl.T.Helper()
@@ -270,6 +284,20 @@ func (m *MockInterface) DeleteDNSRecordSet(arg0 context.Context, arg1, arg2, arg
 func (mr *MockInterfaceMockRecorder) DeleteDNSRecordSet(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDNSRecordSet", reflect.TypeOf((*MockInterface)(nil).DeleteDNSRecordSet), arg0, arg1, arg2, arg3, arg4, arg5)
+}
+
+// DeleteEC2Tags mocks base method.
+func (m *MockInterface) DeleteEC2Tags(arg0 context.Context, arg1 []string, arg2 client.Tags) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteEC2Tags", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteEC2Tags indicates an expected call of DeleteEC2Tags.
+func (mr *MockInterfaceMockRecorder) DeleteEC2Tags(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteEC2Tags", reflect.TypeOf((*MockInterface)(nil).DeleteEC2Tags), arg0, arg1, arg2)
 }
 
 // DeleteELB mocks base method.
@@ -912,6 +940,21 @@ func (m *MockInterface) UpdateRouteTable(arg0 context.Context, arg1, arg2 *clien
 func (mr *MockInterfaceMockRecorder) UpdateRouteTable(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateRouteTable", reflect.TypeOf((*MockInterface)(nil).UpdateRouteTable), arg0, arg1, arg2)
+}
+
+// UpdateVpc mocks base method.
+func (m *MockInterface) UpdateVpc(arg0 context.Context, arg1, arg2 *client.VPC) (*client.VPC, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateVpc", arg0, arg1, arg2)
+	ret0, _ := ret[0].(*client.VPC)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateVpc indicates an expected call of UpdateVpc.
+func (mr *MockInterfaceMockRecorder) UpdateVpc(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateVpc", reflect.TypeOf((*MockInterface)(nil).UpdateVpc), arg0, arg1, arg2)
 }
 
 // MockFactory is a mock of Factory interface.

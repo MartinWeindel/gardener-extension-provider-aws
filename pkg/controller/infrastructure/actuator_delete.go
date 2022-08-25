@@ -21,7 +21,7 @@ import (
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
-	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
 
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
@@ -35,8 +35,49 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
+func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
+	if infrastructure.Annotations != nil && infrastructure.Annotations[AnnotationKeyUseFlow] == True {
+		return a.deleteWithFlow(ctx, log, infrastructure, cluster)
+	}
 	return Delete(ctx, log, a.RESTConfig(), a.Client(), a.Decoder(), infrastructure, a.disableProjectedTokenMount)
+}
+
+func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
+	log.Info("deleteWithFlow")
+
+	infrastructureConfig := &awsapi.InfrastructureConfig{}
+	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
+		return fmt.Errorf("could not decode provider config: %+v", err)
+	}
+
+	awsClient, err := aws.NewClientFromSecretRef(ctx, a.Client(), infrastructure.Spec.SecretRef, infrastructure.Spec.Region)
+	if err != nil {
+		return fmt.Errorf("failed to create new AWS client: %+v", err)
+	}
+
+	var oldFlowState *awsapi.FlowState
+	if infrastructure.Status.ProviderStatus != nil {
+		infraStatus := &awsapi.InfrastructureStatus{}
+		if _, _, err := a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
+			return fmt.Errorf("could not decode provider status: %+v", err)
+		}
+		oldFlowState = infraStatus.FlowState
+	}
+
+	rctx, err := infraflow.NewReconcileContext(ctx, log, awsClient, infrastructure, infrastructureConfig, oldFlowState, nil)
+	if err != nil {
+		return err
+	}
+	flowState, err := rctx.Delete()
+	if err != nil {
+		return err
+	}
+
+	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, infrastructureConfig)
+	if err != nil {
+		return err
+	}
+	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, nil)
 }
 
 // Delete deletes the given Infrastructure.
@@ -109,7 +150,7 @@ func Delete(
 					return nil
 				}
 
-				if err := destroyKubernetesLoadBalancersAndSecurityGroups(ctx, awsClient, vpcID, infrastructure.Namespace); err != nil {
+				if err := infraflow.DestroyKubernetesLoadBalancersAndSecurityGroups(ctx, awsClient, vpcID, infrastructure.Namespace); err != nil {
 					return gardencorev1beta1helper.DeprecatedDetermineError(fmt.Errorf("Failed to destroy load balancers and security groups: %w", err))
 				}
 
@@ -128,30 +169,6 @@ func Delete(
 
 	if err := f.Run(ctx, flow.Opts{}); err != nil {
 		return flow.Causes(err)
-	}
-
-	return nil
-}
-
-func destroyKubernetesLoadBalancersAndSecurityGroups(ctx context.Context, awsClient awsclient.Interface, vpcID, clusterName string) error {
-	for _, v := range []struct {
-		listFn   func(context.Context, string, string) ([]string, error)
-		deleteFn func(context.Context, string) error
-	}{
-		{awsClient.ListKubernetesELBs, awsClient.DeleteELB},
-		{awsClient.ListKubernetesELBsV2, awsClient.DeleteELBV2},
-		{awsClient.ListKubernetesSecurityGroups, awsClient.DeleteSecurityGroup},
-	} {
-		results, err := v.listFn(ctx, vpcID, clusterName)
-		if err != nil {
-			return err
-		}
-
-		for _, result := range results {
-			if err := v.deleteFn(ctx, result); err != nil {
-				return err
-			}
-		}
 	}
 
 	return nil

@@ -56,6 +56,10 @@ type InfrastructureStatus struct {
 	IAM IAM `json:"iam"`
 	// VPC contains information about the created AWS VPC and some related resources.
 	VPC VPCStatus `json:"vpc"`
+
+	// FlowState contains the infrastructure state if directly managed without terraform
+	// +optional
+	FlowState *FlowState `json:"flowState,omitempty"`
 }
 
 // Networks holds information about the Kubernetes and infrastructure networks.
@@ -174,4 +178,20 @@ type SecurityGroup struct {
 	Purpose string `json:"purpose"`
 	// ID is the subnet id.
 	ID string `json:"id"`
+}
+
+// FlowState contains the infrastructure state directly managed without terraform
+type FlowState struct {
+	// Version is state structure version
+	Version string `json:"version"`
+	// DhcpOptionsId is the created AWS DHCP option id if vpc was created
+	// +optional
+	DhcpOptionsId *string `json:"dhcpOptionsId,omitempty"`
+	// VpcId is the created AWS VPC id if vpc was created
+	// +optional
+	VpcId *string `json:"vpcId,omitempty"`
+
+	// CompletedDeletionTasks records completed deletion tasks
+	// +optional
+	CompletedDeletionTasks map[string]bool `json:"completedDeletionTasks,omitempty"`
 }

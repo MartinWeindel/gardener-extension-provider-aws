@@ -516,19 +516,15 @@ func (c *Client) CreateVpcDhcpOptions(ctx context.Context, options *DhcpOptions)
 			Values: aws.StringSlice(values),
 		})
 	}
-	out, err := c.EC2.CreateDhcpOptionsWithContext(ctx, &ec2.CreateDhcpOptionsInput{
+	input := &ec2.CreateDhcpOptionsInput{
 		DhcpConfigurations: newConfigs,
-		TagSpecifications:  options.ToTagSpecifications(),
-	})
+		TagSpecifications:  options.ToTagSpecifications(ec2.ResourceTypeDhcpOptions),
+	}
+	output, err := c.EC2.CreateDhcpOptionsWithContext(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-	return fromDhcpOptions(out.DhcpOptions), nil
-}
-
-func (c *Client) DeleteVpcDhcpOptions(ctx context.Context, id string) error {
-	_, err := c.EC2.DeleteDhcpOptionsWithContext(ctx, &ec2.DeleteDhcpOptionsInput{DhcpOptionsId: aws.String(id)})
-	return ignoreNotFound(err)
+	return fromDhcpOptions(output.DhcpOptions), nil
 }
 
 func (c *Client) DescribeVpcDhcpOptions(ctx context.Context, id *string, tags Tags) ([]*DhcpOptions, error) {
@@ -549,34 +545,30 @@ func (c *Client) DescribeVpcDhcpOptions(ctx context.Context, id *string, tags Ta
 	return options, nil
 }
 
-func (c *Client) CreateVpc(ctx context.Context, vpc *VPC) (*VPC, error) {
+func (c *Client) DeleteVpcDhcpOptions(ctx context.Context, id string) error {
+	_, err := c.EC2.DeleteDhcpOptionsWithContext(ctx, &ec2.DeleteDhcpOptionsInput{DhcpOptionsId: aws.String(id)})
+	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateVpc(ctx context.Context, desired *VPC) (*VPC, error) {
 	input := &ec2.CreateVpcInput{
-		CidrBlock:         aws.String(vpc.CidrBlock),
-		InstanceTenancy:   nil,
-		TagSpecifications: vpc.ToTagSpecifications(),
+		CidrBlock: aws.String(desired.CidrBlock),
+
+		TagSpecifications: desired.ToTagSpecifications(ec2.ResourceTypeVpc),
 	}
 	output, err := c.EC2.CreateVpc(input)
 	if err != nil {
 		return nil, err
 	}
-	vpsList, err := c.DescribeVpcs(ctx, output.Vpc.VpcId, nil)
+	vpcID := *output.Vpc.VpcId
+	vpcList, err := c.DescribeVpcs(ctx, &vpcID, nil)
 	if err != nil {
 		return nil, err
 	}
-	if len(vpsList) != 1 {
-		return nil, fmt.Errorf("vpc %s not found", *output.Vpc.VpcId)
+	if len(vpcList) != 1 {
+		return nil, fmt.Errorf("vpc %s not found", vpcID)
 	}
-	updatedVpc, err := c.updateVpcAttributes(ctx, vpc, vpsList[0])
-	if err != nil {
-		return updatedVpc, err
-	}
-	if vpc.DhcpOptionsId != nil {
-		if err := c.addVpcDhcpOptionAssociation(vpc.VpcId, vpc.DhcpOptionsId); err != nil {
-			updatedVpc.DhcpOptionsId = nil
-			return updatedVpc, err
-		}
-	}
-	return updatedVpc, nil
+	return c.UpdateVpc(ctx, desired, vpcList[0])
 }
 
 func (c *Client) UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error) {
@@ -718,7 +710,7 @@ func (c *Client) describeVpcAttributeWithContext(ctx context.Context, vpcId *str
 func (c *Client) CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error) {
 	input := &ec2.CreateSecurityGroupInput{
 		GroupName:         aws.String(sg.GroupName),
-		TagSpecifications: sg.ToTagSpecifications(),
+		TagSpecifications: sg.ToTagSpecifications(ec2.ResourceTypeSecurityGroup),
 		VpcId:             sg.VpcId,
 		Description:       sg.Description,
 	}
@@ -831,7 +823,7 @@ func (c *Client) DeleteSecurityGroup(ctx context.Context, id string) error {
 
 func (c *Client) CreateInternetGateway(ctx context.Context, gateway *InternetGateway) (*InternetGateway, error) {
 	input := &ec2.CreateInternetGatewayInput{
-		TagSpecifications: gateway.ToTagSpecifications(),
+		TagSpecifications: gateway.ToTagSpecifications(ec2.ResourceTypeInternetGateway),
 	}
 	output, err := c.EC2.CreateInternetGatewayWithContext(ctx, input)
 	if err != nil {
@@ -889,7 +881,7 @@ func (c *Client) DeleteInternetGateway(ctx context.Context, id string) error {
 func (c *Client) CreateVpcEndpoint(ctx context.Context, endpoint *VpcEndpoint) (*VpcEndpoint, error) {
 	input := &ec2.CreateVpcEndpointInput{
 		ServiceName:       aws.String(endpoint.ServiceName),
-		TagSpecifications: endpoint.ToTagSpecifications(),
+		TagSpecifications: endpoint.ToTagSpecifications(ec2.ResourceTypeClientVpnEndpoint),
 		VpcId:             aws.String(endpoint.VpcId),
 	}
 	output, err := c.EC2.CreateVpcEndpointWithContext(ctx, input)
@@ -938,7 +930,7 @@ func (c *Client) DeleteVpcEndpoint(ctx context.Context, id string) error {
 
 func (c *Client) CreateRouteTable(ctx context.Context, routeTable *RouteTable) (*RouteTable, error) {
 	input := &ec2.CreateRouteTableInput{
-		TagSpecifications: routeTable.ToTagSpecifications(),
+		TagSpecifications: routeTable.ToTagSpecifications(ec2.ResourceTypeRouteTable),
 		VpcId:             aws.String(routeTable.VpcId),
 	}
 	output, err := c.EC2.CreateRouteTableWithContext(ctx, input)
@@ -1040,7 +1032,7 @@ func (c *Client) CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, err
 	input := &ec2.CreateSubnetInput{
 		AvailabilityZone:  aws.String(subnet.AvailabilityZone),
 		CidrBlock:         aws.String(subnet.CidrBlock),
-		TagSpecifications: subnet.ToTagSpecifications(),
+		TagSpecifications: subnet.ToTagSpecifications(ec2.ResourceTypeSubnet),
 		VpcId:             aws.String(subnet.VpcId),
 	}
 	output, err := c.EC2.CreateSubnetWithContext(ctx, input)
@@ -1083,7 +1075,7 @@ func (c *Client) CreateElasticIP(ctx context.Context, eip *ElasticIP) (*ElasticI
 	}
 	input := &ec2.AllocateAddressInput{
 		Domain:            aws.String(domainOpt),
-		TagSpecifications: eip.ToTagSpecifications(),
+		TagSpecifications: eip.ToTagSpecifications(ec2.ResourceTypeElasticIp),
 	}
 	output, err := c.EC2.AllocateAddressWithContext(ctx, input)
 	if err != nil {
@@ -1127,7 +1119,7 @@ func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NA
 	input := &ec2.CreateNatGatewayInput{
 		AllocationId:      aws.String(gateway.EIPAllocationId),
 		SubnetId:          aws.String(gateway.SubnetId),
-		TagSpecifications: gateway.ToTagSpecifications(),
+		TagSpecifications: gateway.ToTagSpecifications(ec2.ResourceTypeNatgateway),
 	}
 	output, err := c.EC2.CreateNatGatewayWithContext(ctx, input)
 	if err != nil {
@@ -1166,7 +1158,7 @@ func (c *Client) ImportKeyPair(ctx context.Context, keyName string, publicKey []
 	input := &ec2.ImportKeyPairInput{
 		KeyName:           aws.String(keyName),
 		PublicKeyMaterial: publicKey,
-		TagSpecifications: tags.ToTagSpecifications(),
+		TagSpecifications: tags.ToTagSpecifications(ec2.ResourceTypeKeyPair),
 	}
 	output, err := c.EC2.ImportKeyPairWithContext(ctx, input)
 	if err != nil {
@@ -1376,6 +1368,24 @@ func (c *Client) DeleteIAMRolePolicy(ctx context.Context, policyName, roleName s
 	}
 	_, err := c.IAM.DeleteRolePolicyWithContext(ctx, input)
 	return ignoreNotFound(err)
+}
+
+func (c *Client) CreateEC2Tags(ctx context.Context, resources []string, tags Tags) error {
+	input := &ec2.CreateTagsInput{
+		Resources: aws.StringSlice(resources),
+		Tags:      tags.ToEC2Tags(),
+	}
+	_, err := c.EC2.CreateTagsWithContext(ctx, input)
+	return err
+}
+
+func (c *Client) DeleteEC2Tags(ctx context.Context, resources []string, tags Tags) error {
+	input := &ec2.DeleteTagsInput{
+		Resources: aws.StringSlice(resources),
+		Tags:      tags.ToEC2Tags(),
+	}
+	_, err := c.EC2.DeleteTagsWithContext(ctx, input)
+	return err
 }
 
 func (c *Client) Wait(ctx context.Context, condition wait.ConditionWithContextFunc) error {

@@ -25,6 +25,8 @@ import (
 	awsv1alpha1 "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
+	"k8s.io/utils/pointer"
 
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
@@ -36,8 +38,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
-	infrastructureStatus, state, err := Reconcile(
+func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
+	if infrastructure.Annotations != nil && infrastructure.Annotations[AnnotationKeyUseFlow] == True {
+		return a.reconcileWithFlow(ctx, log, infrastructure, cluster)
+	}
+
+	infrastructureStatus, state, err := ReconcileWithTerraform(
 		ctx,
 		log,
 		a.RESTConfig(),
@@ -52,8 +58,110 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
 }
 
-// Reconcile reconciles the given Infrastructure object. It returns the provider specific status and the Terraform state.
-func Reconcile(
+func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
+	log.Info("reconcileWithFlow")
+
+	infrastructureConfig := &awsapi.InfrastructureConfig{}
+	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
+		return fmt.Errorf("could not decode provider config: %+v", err)
+	}
+
+	awsClient, err := aws.NewClientFromSecretRef(ctx, a.Client(), infrastructure.Spec.SecretRef, infrastructure.Spec.Region)
+	if err != nil {
+		return fmt.Errorf("failed to create new AWS client: %+v", err)
+	}
+
+	var oldFlowState *awsapi.FlowState
+	if infrastructure.Status.ProviderStatus != nil {
+		infraStatus := &awsapi.InfrastructureStatus{}
+		if _, _, err := a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
+			return fmt.Errorf("could not decode provider status: %+v", err)
+		}
+		oldFlowState = infraStatus.FlowState
+	}
+
+	var tfRawState *terraformer.RawState
+	var tfState *infraflow.TerraformState
+	if infrastructure.Status.State != nil {
+		if tfRawState, err = terraformer.UnmarshalRawState(infrastructure.Status.State); err != nil {
+			return fmt.Errorf("could not decode terraform raw state: %+v", err)
+		}
+		data, err := tfRawState.Marshal()
+		if err != nil {
+			return fmt.Errorf("could not marshal terraform raw state: %+v", err)
+		}
+		if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
+			return fmt.Errorf("could not decode terraform state: %+v", err)
+		}
+		tfRawState = &terraformer.RawState{
+			Data:     "",
+			Encoding: "utf-8",
+		}
+	}
+
+	rctx, err := infraflow.NewReconcileContext(ctx, log, awsClient, infrastructure, infrastructureConfig, oldFlowState, tfState)
+	if err != nil {
+		return err
+	}
+
+	flowState, err := rctx.Reconcile()
+	if err != nil {
+		return err
+	}
+
+	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, infrastructureConfig)
+	if err != nil {
+		return err
+	}
+	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, tfRawState)
+}
+
+func computeProviderStatusFromFlowState(ctx context.Context, flowState *awsv1alpha1.FlowState, infrastructureConfig *awsapi.InfrastructureConfig) (*awsv1alpha1.InfrastructureStatus, error) {
+	/*
+		subnets, err := computeProviderStatusSubnets(infrastructureConfig, output)
+		if err != nil {
+			return nil, nil, err
+		}
+	*/
+	return &awsv1alpha1.InfrastructureStatus{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: awsv1alpha1.SchemeGroupVersion.String(),
+			Kind:       "InfrastructureStatus",
+		},
+		VPC: awsv1alpha1.VPCStatus{
+			ID:      pointer.StringDeref(flowState.VpcId, ""),
+			Subnets: nil, //subnets,
+			SecurityGroups: []awsv1alpha1.SecurityGroup{
+				{
+					Purpose: awsapi.PurposeNodes,
+					ID:      "???", //output[aws.SecurityGroupsNodes],
+				},
+			},
+		},
+		EC2: awsv1alpha1.EC2{
+			KeyName: "???", //output[aws.SSHKeyName],
+		},
+		IAM: awsv1alpha1.IAM{
+			InstanceProfiles: []awsv1alpha1.InstanceProfile{
+				{
+					Purpose: awsapi.PurposeNodes,
+					Name:    "???", //output[aws.IAMInstanceProfileNodes],
+				},
+			},
+			Roles: []awsv1alpha1.Role{
+				{
+					Purpose: awsapi.PurposeNodes,
+					ARN:     "???", //output[aws.NodesRole],
+				},
+			},
+		},
+		FlowState: flowState,
+	}, nil
+
+}
+
+// ReconcileWithTerraform reconciles the given Infrastructure object with terraform. It returns the provider specific status and the Terraform state.
+func ReconcileWithTerraform(
 	ctx context.Context,
 	logger logr.Logger,
 	restConfig *rest.Config,
@@ -198,9 +306,13 @@ func generateTerraformInfraConfig(ctx context.Context, infrastructure *extension
 }
 
 func updateProviderStatus(ctx context.Context, c client.Client, infrastructure *extensionsv1alpha1.Infrastructure, infrastructureStatus *awsv1alpha1.InfrastructureStatus, state *terraformer.RawState) error {
-	stateByte, err := state.Marshal()
-	if err != nil {
-		return err
+	var stateByte []byte
+	if state != nil {
+		var err error
+		stateByte, err = state.Marshal()
+		if err != nil {
+			return err
+		}
 	}
 
 	patch := client.MergeFrom(infrastructure.DeepCopy())

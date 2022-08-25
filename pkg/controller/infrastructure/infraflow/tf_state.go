@@ -15,11 +15,16 @@
  *
  */
 
-package tfremove
+package infraflow
 
 import (
 	"encoding/json"
 	"fmt"
+)
+
+const (
+	ModeManaged    = "managed"
+	AttributeKeyId = "id"
 )
 
 type TerraformState struct {
@@ -52,15 +57,44 @@ type TFInstance struct {
 	Dependencies        []string               `json:"dependencies"`
 }
 
-func LoadTerraformState(data map[string]string) (*TerraformState, error) {
-	state := &TerraformState{}
+func LoadTerraformStateFromConfigMapData(data map[string]string) (*TerraformState, error) {
 	content := data["terraform.tfstate"]
 	if content == "" {
 		return nil, fmt.Errorf("key 'terraform.tfstate' not found")
 	}
 
-	if err := json.Unmarshal([]byte(content), state); err != nil {
+	return UnmarshalTerraformState([]byte(content))
+}
+
+func UnmarshalTerraformState(data []byte) (*TerraformState, error) {
+	state := &TerraformState{}
+	if err := json.Unmarshal(data, state); err != nil {
 		return nil, err
 	}
 	return state, nil
+}
+
+func (ts *TerraformState) FindManagedResourceInstances(tfType, name string) []TFInstance {
+	for i := range ts.Resources {
+		resource := &ts.Resources[i]
+		if resource.Mode == ModeManaged && resource.Type == tfType && resource.Name == name {
+			return resource.Instances
+		}
+	}
+	return nil
+}
+
+func attributeAsString(attributes map[string]interface{}, key string) (svalue string, found bool) {
+	if attributes == nil {
+		return
+	}
+	value, ok := attributes[key]
+	if !ok {
+		return
+	}
+	if s, ok := value.(string); ok {
+		svalue = s
+		found = true
+	}
+	return
 }

@@ -474,6 +474,72 @@ string
 </tr>
 </tbody>
 </table>
+<h3 id="aws.provider.extensions.gardener.cloud/v1alpha1.FlowState">FlowState
+</h3>
+<p>
+(<em>Appears on:</em>
+<a href="#aws.provider.extensions.gardener.cloud/v1alpha1.InfrastructureStatus">InfrastructureStatus</a>)
+</p>
+<p>
+<p>FlowState contains the infrastructure state directly managed without terraform</p>
+</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>version</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<p>Version is state structure version</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>dhcpOptionsId</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>DhcpOptionsId is the created AWS DHCP option id if vpc was created</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>vpcId</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>VpcId is the created AWS VPC id if vpc was created</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>completedDeletionTasks</code></br>
+<em>
+map[string]bool
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>CompletedDeletionTasks records completed deletion tasks</p>
+</td>
+</tr>
+</tbody>
+</table>
 <h3 id="aws.provider.extensions.gardener.cloud/v1alpha1.IAM">IAM
 </h3>
 <p>
@@ -656,6 +722,20 @@ VPCStatus
 </td>
 <td>
 <p>VPC contains information about the created AWS VPC and some related resources.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>flowState</code></br>
+<em>
+<a href="#aws.provider.extensions.gardener.cloud/v1alpha1.FlowState">
+FlowState
+</a>
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>FlowState contains the infrastructure state if directly managed without terraform</p>
 </td>
 </tr>
 </tbody>

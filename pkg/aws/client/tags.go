@@ -25,51 +25,53 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 )
 
-type Tag struct {
-	Key   string
-	Value string
-}
-
-type Tags []Tag
+type Tags map[string]string
 
 func FromTags(ec2Tags []*ec2.Tag) Tags {
-	var tags Tags
+	tags := Tags{}
 	for _, et := range ec2Tags {
-		tags = append(tags, Tag{Key: aws.StringValue(et.Key), Value: aws.StringValue(et.Value)})
+		tags[aws.StringValue(et.Key)] = aws.StringValue(et.Value)
 	}
 	return tags
 }
 
 func FromIAMTags(iamTags []*iam.Tag) Tags {
-	var tags Tags
+	tags := Tags{}
 	for _, et := range iamTags {
-		tags = append(tags, Tag{Key: aws.StringValue(et.Key), Value: aws.StringValue(et.Value)})
+		tags[aws.StringValue(et.Key)] = aws.StringValue(et.Value)
 	}
 	return tags
 }
 
-func (tags Tags) ToTagSpecification() *ec2.TagSpecification {
-	tagspec := &ec2.TagSpecification{}
-	for _, t := range tags {
-		tagspec.Tags = append(tagspec.Tags, &ec2.Tag{Key: aws.String(t.Key), Value: aws.String(t.Value)})
+func (tags Tags) ToTagSpecification(resourceType string) *ec2.TagSpecification {
+	tagspec := &ec2.TagSpecification{
+		ResourceType: aws.String(resourceType),
+	}
+	for k, v := range tags {
+		tagspec.Tags = append(tagspec.Tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
 	}
 	return tagspec
 }
 
-func (tags Tags) ToTagSpecifications() []*ec2.TagSpecification {
+func (tags Tags) ToTagSpecifications(resourceType string) []*ec2.TagSpecification {
 	if tags == nil {
 		return nil
 	}
-	return []*ec2.TagSpecification{tags.ToTagSpecification()}
+	return []*ec2.TagSpecification{tags.ToTagSpecification(resourceType)}
 }
 
 func (tags Tags) ToIAMTags() []*iam.Tag {
 	var copy []*iam.Tag
-	for _, tag := range tags {
-		copy = append(copy, &iam.Tag{
-			Key:   aws.String(tag.Key),
-			Value: aws.String(tag.Value),
-		})
+	for k, v := range tags {
+		copy = append(copy, &iam.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	return copy
+}
+
+func (tags Tags) ToEC2Tags() []*ec2.Tag {
+	var copy []*ec2.Tag
+	for k, v := range tags {
+		copy = append(copy, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
 	}
 	return copy
 }
@@ -79,16 +81,16 @@ func (tags Tags) ToFilters() []*ec2.Filter {
 		return nil
 	}
 	var filters []*ec2.Filter
-	for _, t := range tags {
-		filters = append(filters, &ec2.Filter{Name: aws.String(fmt.Sprintf("tag:%s", t.Key)), Values: []*string{aws.String(t.Value)}})
+	for k, v := range tags {
+		filters = append(filters, &ec2.Filter{Name: aws.String(fmt.Sprintf("tag:%s", k)), Values: []*string{aws.String(v)}})
 	}
 	return filters
 }
 
 func (tags Tags) Clone() Tags {
-	var copy Tags
-	for _, tag := range tags {
-		copy = append(copy, tag)
+	copy := Tags{}
+	for k, v := range tags {
+		copy[k] = v
 	}
 	return copy
 }

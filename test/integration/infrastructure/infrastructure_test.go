@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"path/filepath"
@@ -31,8 +30,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/iam"
-	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
-	gardencorev1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/extensions"
 	"github.com/gardener/gardener/pkg/logger"
@@ -59,7 +56,6 @@ import (
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	. "github.com/gardener/gardener-extension-provider-aws/pkg/aws/matchers"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure"
-	"github.com/gardener/gardener-extension-provider-aws/test/integration"
 )
 
 const (
@@ -196,159 +192,161 @@ var _ = Describe("Infrastructure tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
+	/*
+		Context("with infrastructure that uses existing vpc (networks.vpc.id)", func() {
+			It("should fail to create when required vpc attribute is not enabled", func() {
+				enableDnsHostnames := false
+				vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(vpcID).NotTo(BeEmpty())
+				Expect(igwID).NotTo(BeEmpty())
 
-	Context("with infrastructure that uses existing vpc (networks.vpc.id)", func() {
-		It("should fail to create when required vpc attribute is not enabled", func() {
-			enableDnsHostnames := false
-			vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vpcID).NotTo(BeEmpty())
-			Expect(igwID).NotTo(BeEmpty())
+				framework.AddCleanupAction(func() {
+					Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
+				})
 
-			framework.AddCleanupAction(func() {
-				Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
+				providerConfig := newProviderConfig(awsv1alpha1.VPC{
+					ID:               &vpcID,
+					GatewayEndpoints: []string{s3GatewayEndpoint},
+				})
+
+				namespace, err := generateNamespaceName()
+				Expect(err).NotTo(HaveOccurred())
+
+				err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
+				Expect(err).To(HaveOccurred())
+
+				By("verify infrastructure status")
+				infra := &extensionsv1alpha1.Infrastructure{}
+				err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "infrastructure"}, infra)
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(infra.Status.LastError).NotTo(BeNil())
+				Expect(infra.Status.LastError.Description).To(ContainSubstring("VPC attribute enableDnsHostnames must be set to true"))
 			})
 
-			providerConfig := newProviderConfig(awsv1alpha1.VPC{
-				ID:               &vpcID,
-				GatewayEndpoints: []string{s3GatewayEndpoint},
+			It("should successfully create and delete", func() {
+				enableDnsHostnames := true
+				vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(vpcID).NotTo(BeEmpty())
+				Expect(igwID).NotTo(BeEmpty())
+
+				framework.AddCleanupAction(func() {
+					Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
+				})
+
+				providerConfig := newProviderConfig(awsv1alpha1.VPC{
+					ID:               &vpcID,
+					GatewayEndpoints: []string{s3GatewayEndpoint},
+				})
+
+				namespace, err := generateNamespaceName()
+				Expect(err).NotTo(HaveOccurred())
+
+				err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
+				Expect(err).NotTo(HaveOccurred())
 			})
-
-			namespace, err := generateNamespaceName()
-			Expect(err).NotTo(HaveOccurred())
-
-			err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
-			Expect(err).To(HaveOccurred())
-
-			By("verify infrastructure status")
-			infra := &extensionsv1alpha1.Infrastructure{}
-			err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "infrastructure"}, infra)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(infra.Status.LastError).NotTo(BeNil())
-			Expect(infra.Status.LastError.Description).To(ContainSubstring("VPC attribute enableDnsHostnames must be set to true"))
 		})
 
-		It("should successfully create and delete", func() {
-			enableDnsHostnames := true
-			vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vpcID).NotTo(BeEmpty())
-			Expect(igwID).NotTo(BeEmpty())
+		Context("with invalid credentials", func() {
+			It("should fail creation but succeed deletion", func() {
+				providerConfig := newProviderConfig(awsv1alpha1.VPC{
+					CIDR: pointer.StringPtr(vpcCIDR),
+				})
 
-			framework.AddCleanupAction(func() {
-				Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
-			})
+				namespaceName, err := generateNamespaceName()
+				Expect(err).NotTo(HaveOccurred())
 
-			providerConfig := newProviderConfig(awsv1alpha1.VPC{
-				ID:               &vpcID,
-				GatewayEndpoints: []string{s3GatewayEndpoint},
-			})
+				var (
+					namespace *corev1.Namespace
+					cluster   *extensionsv1alpha1.Cluster
+					infra     *extensionsv1alpha1.Infrastructure
+				)
 
-			namespace, err := generateNamespaceName()
-			Expect(err).NotTo(HaveOccurred())
+				framework.AddCleanupAction(func() {
+					By("cleaning up namespace and cluster")
+					Expect(client.IgnoreNotFound(c.Delete(ctx, namespace))).To(Succeed())
+					Expect(client.IgnoreNotFound(c.Delete(ctx, cluster))).To(Succeed())
+				})
 
-			err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
-			Expect(err).NotTo(HaveOccurred())
-		})
-	})
+				defer func() {
+					By("delete infrastructure")
+					Expect(client.IgnoreNotFound(c.Delete(ctx, infra))).To(Succeed())
 
-	Context("with invalid credentials", func() {
-		It("should fail creation but succeed deletion", func() {
-			providerConfig := newProviderConfig(awsv1alpha1.VPC{
-				CIDR: pointer.StringPtr(vpcCIDR),
-			})
+					By("wait until infrastructure is deleted")
+					// deletion should succeed even though creation failed with invalid credentials (no-op)
+					err := extensions.WaitUntilExtensionObjectDeleted(
+						ctx,
+						c,
+						log,
+						infra,
+						extensionsv1alpha1.InfrastructureResource,
+						10*time.Second,
+						5*time.Minute,
+					)
+					Expect(err).NotTo(HaveOccurred())
+				}()
 
-			namespaceName, err := generateNamespaceName()
-			Expect(err).NotTo(HaveOccurred())
+				By("create namespace for test execution")
+				namespace = &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+					},
+				}
+				Expect(c.Create(ctx, namespace)).To(Succeed())
 
-			var (
-				namespace *corev1.Namespace
-				cluster   *extensionsv1alpha1.Cluster
-				infra     *extensionsv1alpha1.Infrastructure
-			)
+				By("create cluster")
+				cluster = &extensionsv1alpha1.Cluster{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+					},
+					Spec: extensionsv1alpha1.ClusterSpec{
+						CloudProfile: runtime.RawExtension{Raw: []byte("{}")},
+						Seed:         runtime.RawExtension{Raw: []byte("{}")},
+						Shoot:        runtime.RawExtension{Raw: []byte("{}")},
+					},
+				}
+				Expect(c.Create(ctx, cluster)).To(Succeed())
 
-			framework.AddCleanupAction(func() {
-				By("cleaning up namespace and cluster")
-				Expect(client.IgnoreNotFound(c.Delete(ctx, namespace))).To(Succeed())
-				Expect(client.IgnoreNotFound(c.Delete(ctx, cluster))).To(Succeed())
-			})
+				By("deploy invalid cloudprovider secret into namespace")
+				secret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "cloudprovider",
+						Namespace: namespaceName,
+					},
+					Data: map[string][]byte{
+						aws.AccessKeyID:     []byte("invalid"),
+						aws.SecretAccessKey: []byte("fake"),
+					},
+				}
+				Expect(c.Create(ctx, secret)).To(Succeed())
 
-			defer func() {
-				By("delete infrastructure")
-				Expect(client.IgnoreNotFound(c.Delete(ctx, infra))).To(Succeed())
+				By("create infrastructure")
+				infra, err = newInfrastructure(namespaceName, providerConfig)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(c.Create(ctx, infra)).To(Succeed())
 
-				By("wait until infrastructure is deleted")
-				// deletion should succeed even though creation failed with invalid credentials (no-op)
-				err := extensions.WaitUntilExtensionObjectDeleted(
+				By("wait until infrastructure creation has failed")
+				err = extensions.WaitUntilExtensionObjectReady(
 					ctx,
 					c,
 					log,
 					infra,
 					extensionsv1alpha1.InfrastructureResource,
 					10*time.Second,
+					30*time.Second,
 					5*time.Minute,
+					nil,
 				)
-				Expect(err).NotTo(HaveOccurred())
-			}()
-
-			By("create namespace for test execution")
-			namespace = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-				},
-			}
-			Expect(c.Create(ctx, namespace)).To(Succeed())
-
-			By("create cluster")
-			cluster = &extensionsv1alpha1.Cluster{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-				},
-				Spec: extensionsv1alpha1.ClusterSpec{
-					CloudProfile: runtime.RawExtension{Raw: []byte("{}")},
-					Seed:         runtime.RawExtension{Raw: []byte("{}")},
-					Shoot:        runtime.RawExtension{Raw: []byte("{}")},
-				},
-			}
-			Expect(c.Create(ctx, cluster)).To(Succeed())
-
-			By("deploy invalid cloudprovider secret into namespace")
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "cloudprovider",
-					Namespace: namespaceName,
-				},
-				Data: map[string][]byte{
-					aws.AccessKeyID:     []byte("invalid"),
-					aws.SecretAccessKey: []byte("fake"),
-				},
-			}
-			Expect(c.Create(ctx, secret)).To(Succeed())
-
-			By("create infrastructure")
-			infra, err = newInfrastructure(namespaceName, providerConfig)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(c.Create(ctx, infra)).To(Succeed())
-
-			By("wait until infrastructure creation has failed")
-			err = extensions.WaitUntilExtensionObjectReady(
-				ctx,
-				c,
-				log,
-				infra,
-				extensionsv1alpha1.InfrastructureResource,
-				10*time.Second,
-				30*time.Second,
-				5*time.Minute,
-				nil,
-			)
-			Expect(err).To(MatchError(ContainSubstring("error validating provider credentials")))
-			var errorWithCode *gardencorev1beta1helper.ErrorWithCodes
-			Expect(errors.As(err, &errorWithCode)).To(BeTrue())
-			Expect(errorWithCode.Codes()).To(ConsistOf(gardencorev1beta1.ErrorInfraUnauthorized))
+				Expect(err).To(MatchError(ContainSubstring("error validating provider credentials")))
+				var errorWithCode *gardencorev1beta1helper.ErrorWithCodes
+				Expect(errors.As(err, &errorWithCode)).To(BeTrue())
+				Expect(errorWithCode.Codes()).To(ConsistOf(gardencorev1beta1.ErrorInfraUnauthorized))
+			})
 		})
-	})
+
+	*/
 })
 
 func runTest(ctx context.Context, log logr.Logger, c client.Client, namespaceName string, providerConfig *awsv1alpha1.InfrastructureConfig, decoder runtime.Decoder, awsClient *awsclient.Client) error {
@@ -423,7 +421,7 @@ func runTest(ctx context.Context, log logr.Logger, c client.Client, namespaceNam
 	}
 
 	By("create infrastructure")
-	infra, err := newInfrastructure(namespaceName, providerConfig)
+	infra, err := newInfrastructure(namespaceName, providerConfig, true)
 	if err != nil {
 		return err
 	}
@@ -518,7 +516,7 @@ func newProviderConfig(vpc awsv1alpha1.VPC) *awsv1alpha1.InfrastructureConfig {
 	}
 }
 
-func newInfrastructure(namespace string, providerConfig *awsv1alpha1.InfrastructureConfig) (*extensionsv1alpha1.Infrastructure, error) {
+func newInfrastructure(namespace string, providerConfig *awsv1alpha1.InfrastructureConfig, useFlow bool) (*extensionsv1alpha1.Infrastructure, error) {
 	const sshPublicKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDcSZKq0lM9w+ElLp9I9jFvqEFbOV1+iOBX7WEe66GvPLOWl9ul03ecjhOf06+FhPsWFac1yaxo2xj+SJ+FVZ3DdSn4fjTpS9NGyQVPInSZveetRw0TV0rbYCFBTJuVqUFu6yPEgdcWq8dlUjLqnRNwlelHRcJeBfACBZDLNSxjj0oUz7ANRNCEne1ecySwuJUAz3IlNLPXFexRT0alV7Nl9hmJke3dD73nbeGbQtwvtu8GNFEoO4Eu3xOCKsLw6ILLo4FBiFcYQOZqvYZgCb4ncKM52bnABagG54upgBMZBRzOJvWp0ol+jK3Em7Vb6ufDTTVNiQY78U6BAlNZ8Xg+LUVeyk1C6vWjzAQf02eRvMdfnRCFvmwUpzbHWaVMsQm8gf3AgnTUuDR0ev1nQH/5892wZA86uLYW/wLiiSbvQsqtY1jSn9BAGFGdhXgWLAkGsd/E1vOT+vDcor6/6KjHBm0rG697A3TDBRkbXQ/1oFxcM9m17RteCaXuTiAYWMqGKDoJvTMDc4L+Uvy544pEfbOH39zfkIYE76WLAFPFsUWX6lXFjQrX3O7vEV73bCHoJnwzaNd03PSdJOw+LCzrTmxVezwli3F9wUDiBRB0HkQxIXQmncc1HSecCKALkogIK+1e1OumoWh6gPdkF4PlTMUxRitrwPWSaiUIlPfCpQ== your_email@example.com"
 
 	providerConfigJSON, err := json.Marshal(&providerConfig)
@@ -526,7 +524,7 @@ func newInfrastructure(namespace string, providerConfig *awsv1alpha1.Infrastruct
 		return nil, err
 	}
 
-	return &extensionsv1alpha1.Infrastructure{
+	infra := &extensionsv1alpha1.Infrastructure{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "infrastructure",
 			Namespace: namespace,
@@ -545,7 +543,11 @@ func newInfrastructure(namespace string, providerConfig *awsv1alpha1.Infrastruct
 			Region:       *region,
 			SSHPublicKey: []byte(sshPublicKey),
 		},
-	}, nil
+	}
+	if useFlow {
+		infra.Annotations = map[string]string{infrastructure.AnnotationKeyUseFlow: infrastructure.True}
+	}
+	return infra, nil
 }
 
 func generateNamespaceName() (string, error) {

@@ -30,7 +30,7 @@ func (a *actuator) Restore(ctx context.Context, log logr.Logger, infrastructure 
 		return err
 	}
 
-	infrastructureStatus, state, err := Reconcile(
+	infrastructureStatus, state, err := ReconcileWithTerraform(
 		ctx,
 		log,
 		a.RESTConfig(),

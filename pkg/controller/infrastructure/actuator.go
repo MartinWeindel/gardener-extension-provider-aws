@@ -30,6 +30,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+const (
+	AnnotationKeyUseFlow = "aws.provider.extensions.gardener.cloud/use-flow"
+	True                 = "true"
+)
+
 type actuator struct {
 	common.RESTConfigContext
 	disableProjectedTokenMount bool
