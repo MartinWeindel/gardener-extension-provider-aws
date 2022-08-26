@@ -45,7 +45,7 @@ func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *
 func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
 	log.Info("deleteWithFlow")
 
-	rctx, err := a.createReconcileContext(ctx, log, infrastructure, nil)
+	rctx, err := a.createReconcileContext(ctx, log, infrastructure)
 	if err != nil {
 		return err
 	}

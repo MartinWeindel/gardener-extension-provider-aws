@@ -22,59 +22,42 @@ import (
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
-	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/go-logr/logr"
-	"k8s.io/utils/pointer"
 )
 
 const (
-	TagKeyName                                      = "Name"
-	TagKeyClusterTemplate                           = "kubernetes.io/cluster/%s"
-	CompletedDeletionLoadBalancersAndSecurityGroups = "LoadBalancersAndSecurityGroups"
-	deleted                                         = "<deleted>"
+	TagKeyName                            = "Name"
+	TagKeyClusterTemplate                 = "kubernetes.io/cluster/%s"
+	TaskKeyLoadBalancersAndSecurityGroups = "LoadBalancersAndSecurityGroups"
+
+	IdentiferVPC         = "VPC"
+	IdentiferDHCPOptions = "DHCPOptions"
+	IdentiferDefaultSG   = "DefaultSecurityGroup"
 )
-
-var deletedMarker = pointer.String(deleted)
-
-type StateWhiteboard struct {
-	vpcID         *string
-	dhcpOptionsID *string
-
-	deletedKubernetesLoadBalancersAndSecurityGroups bool
-}
-
-func (w *StateWhiteboard) hasVPCID() bool {
-	return hasValue(w.vpcID)
-}
-
-func hasValue(id *string) bool {
-	return id != nil && *id != "" && *id != deleted
-}
-
-func alreadyDeleted(id *string) bool {
-	return id == deletedMarker
-}
 
 type ReconcileContext struct {
 	infra      *extensionsv1alpha1.Infrastructure
 	config     *awsapi.InfrastructureConfig
 	logger     logr.Logger
 	client     awsclient.Interface
+	updater    awsclient.Updater
 	commonTags awsclient.Tags
 
-	state StateWhiteboard
+	state state.Whiteboard
 }
 
 func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 	infra *extensionsv1alpha1.Infrastructure, config *awsapi.InfrastructureConfig,
-	oldFlowState *awsapi.FlowState, tfState *TerraformState) (*ReconcileContext, error) {
+	oldFlowState *awsapi.FlowState) (*ReconcileContext, error) {
 	rc := &ReconcileContext{
-		infra:  infra,
-		config: config,
-		logger: logger,
-		client: awsClient,
+		infra:   infra,
+		config:  config,
+		logger:  logger,
+		client:  awsClient,
+		updater: awsclient.NewUpdater(awsClient),
 		commonTags: awsclient.Tags{
 			fmt.Sprintf(TagKeyClusterTemplate, infra.Namespace): "1",
 			TagKeyName: infra.Namespace,
@@ -86,29 +69,14 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 	}
 
 	if config != nil && config.Networks.VPC.ID != nil {
-		rc.state.vpcID = config.Networks.VPC.ID
-	} else {
-		if oldFlowState != nil && oldFlowState.VpcId != nil {
-			rc.state.vpcID = oldFlowState.VpcId
-		} else if tfState != nil {
-			value := tfState.Outputs[aws.VPCIDKey].Value
-			rc.state.vpcID = &value
-		}
-
-		if oldFlowState != nil && oldFlowState.DhcpOptionsId != nil {
-			rc.state.dhcpOptionsID = oldFlowState.DhcpOptionsId
-		} else if tfState != nil {
-			instances := tfState.FindManagedResourceInstances("aws_vpc_dhcp_options", "vpc_dhcp_options")
-			if instances != nil && len(instances) == 1 {
-				if value, ok := attributeAsString(instances[0].Attributes, AttributeKeyId); ok {
-					rc.state.dhcpOptionsID = &value
-				}
-			}
-		}
+		rc.state.SetIDPtr(IdentiferVPC, config.Networks.VPC.ID)
+	} else if oldFlowState != nil {
+		rc.state.SetIDPtr(IdentiferVPC, oldFlowState.VpcId)
+		rc.state.SetIDPtr(IdentiferDHCPOptions, oldFlowState.DhcpOptionsId)
 	}
 
 	if oldFlowState != nil && oldFlowState.CompletedDeletionTasks != nil {
-		rc.state.deletedKubernetesLoadBalancersAndSecurityGroups = oldFlowState.CompletedDeletionTasks[CompletedDeletionLoadBalancersAndSecurityGroups]
+		rc.state.MarkTaskCompleted(TaskKeyLoadBalancersAndSecurityGroups, oldFlowState.CompletedDeletionTasks[TaskKeyLoadBalancersAndSecurityGroups])
 	}
 
 	return rc, nil
@@ -121,13 +89,13 @@ func (rc *ReconcileContext) GetInfrastructureConfig() *awsapi.InfrastructureConf
 func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
 	newFlowState := &awsapiv1alpha.FlowState{
 		Version:       FlowStateVersion1,
-		DhcpOptionsId: rc.state.dhcpOptionsID,
-		VpcId:         rc.state.vpcID,
+		DhcpOptionsId: rc.state.GetID(IdentiferDHCPOptions),
+		VpcId:         rc.state.GetID(IdentiferVPC),
 	}
 
 	completedDeletionTasks := map[string]bool{}
-	if rc.state.deletedKubernetesLoadBalancersAndSecurityGroups {
-		completedDeletionTasks[CompletedDeletionLoadBalancersAndSecurityGroups] = true
+	if rc.state.IsTaskMarkedCompleted(TaskKeyLoadBalancersAndSecurityGroups) {
+		completedDeletionTasks[TaskKeyLoadBalancersAndSecurityGroups] = true
 	}
 	if len(completedDeletionTasks) > 0 {
 		newFlowState.CompletedDeletionTasks = completedDeletionTasks

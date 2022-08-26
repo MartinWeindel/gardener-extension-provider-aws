@@ -26,8 +26,6 @@ import (
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
-	"k8s.io/utils/pointer"
-
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
@@ -35,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -58,8 +57,7 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
 }
 
-func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure,
-	tfState *infraflow.TerraformState) (*infraflow.ReconcileContext, error) {
+func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure) (*infraflow.ReconcileContext, error) {
 
 	infrastructureConfig := &awsapi.InfrastructureConfig{}
 	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
@@ -80,41 +78,68 @@ func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger, 
 		oldFlowState = infraStatus.FlowState
 	}
 
-	return infraflow.NewReconcileContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, tfState)
-}
-
-func (a *actuator) getTerraformState(infrastructure *extensionsv1alpha1.Infrastructure) (tfRawState *terraformer.RawState, tfState *infraflow.TerraformState, err error) {
-	if infrastructure.Status.State != nil {
-		if tfRawState, err = terraformer.UnmarshalRawState(infrastructure.Status.State); err != nil {
-			err = fmt.Errorf("could not decode terraform raw state: %+v", err)
-			return
-		}
-		var data []byte
-		data, err = tfRawState.Marshal()
+	if oldFlowState == nil {
+		oldFlowState, err = migrateTerraformStateToFlowState(infrastructure.Status.State)
 		if err != nil {
-			err = fmt.Errorf("could not marshal terraform raw state: %+v", err)
-			return
-		}
-		if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
-			err = fmt.Errorf("could not decode terraform state: %+v", err)
-			return
-		}
-		tfRawState = &terraformer.RawState{
-			Data:     "",
-			Encoding: "utf-8",
+			return nil, err
 		}
 	}
-	return
+
+	return infraflow.NewReconcileContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState)
+}
+
+func migrateTerraformStateToFlowState(state *runtime.RawExtension) (*awsapi.FlowState, error) {
+	var (
+		tfRawState *terraformer.RawState
+		tfState    *infraflow.TerraformState
+		err        error
+	)
+
+	if state != nil {
+		if tfRawState, err = getTerraformerRawState(state); err != nil {
+			return nil, err
+		}
+		data, err := tfRawState.Marshal()
+		if err != nil {
+			return nil, fmt.Errorf("could not marshal terraform raw state: %+v", err)
+		}
+		if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
+			return nil, fmt.Errorf("could not decode terraform state: %+v", err)
+		}
+	}
+	flowState := &awsapi.FlowState{
+		Version: infraflow.FlowStateVersion1,
+	}
+
+	value := tfState.Outputs[aws.VPCIDKey].Value
+	if value != "" {
+		flowState.VpcId = &value
+	}
+	instances := tfState.FindManagedResourceInstances("aws_vpc_dhcp_options", "vpc_dhcp_options")
+	if instances != nil && len(instances) == 1 {
+		if value, ok := infraflow.AttributeAsString(instances[0].Attributes, infraflow.AttributeKeyId); ok {
+			flowState.DhcpOptionsId = &value
+		}
+	}
+
+	return flowState, nil
+}
+
+func getTerraformerRawState(state *runtime.RawExtension) (*terraformer.RawState, error) {
+	if state == nil {
+		return nil, nil
+	}
+	tfRawState, err := terraformer.UnmarshalRawState(state)
+	if err != nil {
+		return nil, fmt.Errorf("could not decode terraform raw state: %+v", err)
+	}
+	return tfRawState, nil
 }
 
 func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
 	log.Info("reconcileWithFlow")
 
-	tfRawState, tfState, err := a.getTerraformState(infrastructure)
-	if err != nil {
-		return err
-	}
-	rctx, err := a.createReconcileContext(ctx, log, infrastructure, tfState)
+	rctx, err := a.createReconcileContext(ctx, log, infrastructure)
 	if err != nil {
 		return err
 	}
@@ -126,6 +151,10 @@ func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infra
 
 	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, rctx.GetInfrastructureConfig())
 	if err != nil {
+		return err
+	}
+	var tfRawState *terraformer.RawState
+	if tfRawState, err = getTerraformerRawState(infrastructure.Status.State); err != nil {
 		return err
 	}
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, tfRawState)

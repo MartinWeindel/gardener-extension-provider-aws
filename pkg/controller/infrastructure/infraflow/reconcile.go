@@ -27,10 +27,13 @@ import (
 	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	"k8s.io/utils/pointer"
 )
 
 const (
-	FlowStateVersion1 = "1"
+	FlowStateVersion1    = "1"
+	defaultRetryInterval = 5 * time.Second
+	defaultRetryTimeout  = 5 * time.Minute
 )
 
 func (rc *ReconcileContext) Reconcile(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
@@ -49,16 +52,36 @@ func (rc *ReconcileContext) buildReconcileGraph() *flow.Graph {
 	ensureDhcpOptions := g.Add(flow.Task{
 		Name: "ensure DHCP options for VPC",
 		Fn: flow.TaskFn(rc.EnsureDhcpOptions).
-			RetryUntilTimeout(5*time.Second, 5*time.Minute).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(createVPC)})
 	ensureVpc := g.Add(flow.Task{
 		Name: "ensure VPC",
 		Fn: flow.TaskFn(rc.EnsureVpc).
-			RetryUntilTimeout(5*time.Second, 5*time.Minute).
-			DoIf(createVPC),
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 		Dependencies: flow.NewTaskIDs(ensureDhcpOptions),
 	})
-	unused(ensureVpc)
+	ensureDefaultSecurityGroup := g.Add(flow.Task{
+		Name: "ensure default security group",
+		Fn: flow.TaskFn(rc.EnsureDefaultSecurityGroup).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
+			DoIf(createVPC),
+		Dependencies: flow.NewTaskIDs(ensureVpc),
+	})
+	ensureInternetGateway := g.Add(flow.Task{
+		Name: "ensure internet gateway",
+		Fn: flow.TaskFn(rc.EnsureInternetGateway).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
+			DoIf(createVPC),
+		Dependencies: flow.NewTaskIDs(ensureVpc),
+	})
+	ensureGatewayEndpoints := g.Add(flow.Task{
+		Name: "ensure gateway endpoints",
+		Fn: flow.TaskFn(rc.EnsureGatewayEndpoints).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway),
+	})
+
+	unused(ensureGatewayEndpoints)
 
 	return g
 }
@@ -76,13 +99,13 @@ func (rc *ReconcileContext) EnsureDhcpOptions(ctx context.Context) error {
 			"domain-name-servers": {"AmazonProvidedDNS"},
 		},
 	}
-	found, err := rc.client.DescribeVpcDhcpOptions(ctx, rc.state.dhcpOptionsID, rc.commonTags)
+	found, err := rc.client.DescribeVpcDhcpOptions(ctx, rc.state.GetID(IdentiferDHCPOptions), rc.commonTags)
 	if err != nil {
 		return err
 	}
 	switch len(found) {
 	case 1:
-		rc.state.dhcpOptionsID = &found[0].DhcpOptionsId
+		rc.state.SetID(IdentiferDHCPOptions, found[0].DhcpOptionsId)
 		if err = rc.ensureEC2Tags(ctx, found[0].DhcpOptionsId, found[0].Tags); err != nil {
 			return err
 		}
@@ -91,7 +114,7 @@ func (rc *ReconcileContext) EnsureDhcpOptions(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		rc.state.dhcpOptionsID = &created.DhcpOptionsId
+		rc.state.SetID(IdentiferDHCPOptions, created.DhcpOptionsId)
 	default:
 		return fmt.Errorf("multiple DHCP options found by tags: %d", len(found))
 	}
@@ -127,24 +150,28 @@ func (rc *ReconcileContext) ensureEC2Tags(ctx context.Context, id string, curren
 }
 
 func (rc *ReconcileContext) EnsureVpc(ctx context.Context) error {
+	if rc.config.Networks.VPC.ID != nil {
+		rc.state.SetIDPtr(IdentiferVPC, rc.config.Networks.VPC.ID)
+		return rc.ensureExistingVpc(ctx, rc.config.Networks.VPC.ID)
+	}
 	desired := &client.VPC{
 		Tags:               rc.commonTags,
 		EnableDnsSupport:   true,
 		EnableDnsHostnames: true,
-		DhcpOptionsId:      rc.state.dhcpOptionsID,
+		DhcpOptionsId:      rc.state.GetID(IdentiferDHCPOptions),
 	}
 	if rc.config.Networks.VPC.CIDR == nil {
 		return fmt.Errorf("missing VPC CIDR")
 	}
 	desired.CidrBlock = *rc.config.Networks.VPC.CIDR
-	found, err := rc.client.DescribeVpcs(ctx, rc.state.vpcID, rc.commonTags)
+	found, err := rc.client.DescribeVpcs(ctx, rc.state.GetID(IdentiferVPC), rc.commonTags)
 	if err != nil {
 		return err
 	}
 	switch len(found) {
 	case 1:
-		rc.state.vpcID = &found[0].VpcId
-		if _, err := rc.client.UpdateVpc(ctx, desired, found[0]); err != nil {
+		rc.state.SetID(IdentiferVPC, found[0].VpcId)
+		if _, err := rc.updater.UpdateVpc(ctx, desired, found[0]); err != nil {
 			return err
 		}
 		if err = rc.ensureEC2Tags(ctx, found[0].VpcId, found[0].Tags); err != nil {
@@ -155,12 +182,66 @@ func (rc *ReconcileContext) EnsureVpc(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		rc.state.vpcID = &created.VpcId
+		rc.state.SetID(IdentiferVPC, created.VpcId)
+		if _, err := rc.updater.UpdateVpc(ctx, desired, created); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("multiple VPCs found by tags: %d", len(found))
 	}
 
 	return nil
+}
+
+func (rc *ReconcileContext) ensureExistingVpc(ctx context.Context, vpcID *string) error {
+	found, err := rc.client.DescribeVpcs(ctx, vpcID, nil)
+	if err != nil {
+		return err
+	}
+	if len(found) == 0 {
+		return fmt.Errorf("VPC %s has not been found", *vpcID)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDefaultSecurityGroup(ctx context.Context) error {
+	desired := &client.SecurityGroup{
+		VpcId:       rc.state.GetID(IdentiferVPC),
+		GroupName:   "default",
+		Description: pointer.String("default VPC security group"),
+	}
+	found, err := rc.client.DescribeSecurityGroups(ctx, rc.state.GetID(IdentiferDefaultSG), rc.commonTags)
+	if err != nil {
+		return err
+	}
+	var current *client.SecurityGroup
+	for _, item := range found {
+		if item.GroupName == "default" {
+			current = item
+			break
+		}
+	}
+	if current != nil {
+		rc.state.SetID(IdentiferDefaultSG, current.GroupId)
+		if _, err := rc.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
+			return err
+		}
+		return nil
+	}
+	created, err := rc.client.CreateSecurityGroup(ctx, desired)
+	if err != nil {
+		return err
+	}
+	rc.state.SetID(IdentiferDefaultSG, created.GroupId)
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureInternetGateway(ctx context.Context) error {
+	return fmt.Errorf("todo")
+}
+
+func (rc *ReconcileContext) EnsureGatewayEndpoints(ctx context.Context) error {
+	return fmt.Errorf("todo")
 }
 
 func ignoreTag(ignoreTags *awsapi.IgnoreTags, key string) bool {

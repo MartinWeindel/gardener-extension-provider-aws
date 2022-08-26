@@ -84,7 +84,7 @@ func (ts *TerraformState) FindManagedResourceInstances(tfType, name string) []TF
 	return nil
 }
 
-func attributeAsString(attributes map[string]interface{}, key string) (svalue string, found bool) {
+func AttributeAsString(attributes map[string]interface{}, key string) (svalue string, found bool) {
 	if attributes == nil {
 		return
 	}

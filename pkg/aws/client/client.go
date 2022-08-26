@@ -17,7 +17,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -71,6 +70,8 @@ type Client struct {
 	Logger                        logr.Logger
 	PollInterval                  time.Duration
 }
+
+var _ Interface = &Client{}
 
 // NewInterface creates a new instance of Interface for the given AWS credentials and region.
 func NewInterface(accessKeyID, secretAccessKey, region string) (Interface, error) {
@@ -568,68 +569,51 @@ func (c *Client) CreateVpc(ctx context.Context, desired *VPC) (*VPC, error) {
 	if len(vpcList) == 0 {
 		return nil, fmt.Errorf("vpc %s not found", vpcID)
 	}
-	return c.UpdateVpc(ctx, desired, vpcList[0])
+	return vpcList[0], nil
 }
 
-func (c *Client) UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error) {
-	if desired.CidrBlock != current.CidrBlock {
-		return nil, fmt.Errorf("cannot change CIDR block")
-	}
-	new, err := c.updateVpcAttributes(ctx, desired, current)
-	if err != nil {
-		return nil, err
-	}
-	if !reflect.DeepEqual(desired.DhcpOptionsId, current.DhcpOptionsId) {
-		if err := c.addVpcDhcpOptionAssociation(current.VpcId, desired.DhcpOptionsId); err != nil {
-			return nil, err
-		}
-		new.DhcpOptionsId = desired.DhcpOptionsId
-	}
-	return new, nil
-}
-
-func (c *Client) updateVpcAttributes(ctx context.Context, desired, current *VPC) (*VPC, error) {
-	new := *current
-	if desired.EnableDnsSupport != current.EnableDnsSupport {
+func (c *Client) UpdateVpcAttribute(ctx context.Context, vpcId, attributeName string, value bool) error {
+	switch attributeName {
+	case ec2.VpcAttributeNameEnableDnsSupport:
 		input := &ec2.ModifyVpcAttributeInput{
 			EnableDnsSupport: &ec2.AttributeBooleanValue{
-				Value: aws.Bool(desired.EnableDnsSupport),
+				Value: aws.Bool(value),
 			},
-			VpcId: aws.String(current.VpcId),
+			VpcId: aws.String(vpcId),
 		}
 		if _, err := c.EC2.ModifyVpcAttribute(input); err != nil {
-			return nil, err
+			return err
 		}
 		if err := c.Wait(ctx, func(ctx context.Context) (bool, error) {
-			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(current.VpcId), ec2.VpcAttributeNameEnableDnsSupport)
-			return b == desired.EnableDnsSupport, err
+			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(vpcId), ec2.VpcAttributeNameEnableDnsSupport)
+			return b == value, err
 		}); err != nil {
-			return nil, err
+			return err
 		}
-		new.EnableDnsSupport = desired.EnableDnsSupport
-	}
-	if desired.EnableDnsHostnames != current.EnableDnsHostnames {
+		return nil
+	case ec2.VpcAttributeNameEnableDnsHostnames:
 		input := &ec2.ModifyVpcAttributeInput{
 			EnableDnsHostnames: &ec2.AttributeBooleanValue{
-				Value: aws.Bool(desired.EnableDnsHostnames),
+				Value: aws.Bool(value),
 			},
-			VpcId: aws.String(current.VpcId),
+			VpcId: aws.String(vpcId),
 		}
 		if _, err := c.EC2.ModifyVpcAttribute(input); err != nil {
-			return nil, err
+			return err
 		}
 		if err := c.Wait(ctx, func(ctx context.Context) (bool, error) {
-			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(current.VpcId), ec2.VpcAttributeNameEnableDnsHostnames)
-			return b == desired.EnableDnsHostnames, err
+			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(vpcId), ec2.VpcAttributeNameEnableDnsHostnames)
+			return b == value, err
 		}); err != nil {
-			return nil, err
+			return err
 		}
-		new.EnableDnsHostnames = desired.EnableDnsHostnames
+		return nil
+	default:
+		return fmt.Errorf("unknown attribute name: %s", attributeName)
 	}
-	return &new, nil
 }
 
-func (c *Client) addVpcDhcpOptionAssociation(vpcId string, dhcpOptionsId *string) error {
+func (c *Client) AddVpcDhcpOptionAssociation(vpcId string, dhcpOptionsId *string) error {
 	if dhcpOptionsId == nil {
 		// AWS does not provide an API to disassociate a DHCP Options set from a VPC.
 		// So, we do this by setting the VPC to the default DHCP Options Set.
@@ -721,7 +705,7 @@ func (c *Client) CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*S
 	created := *sg
 	created.Rules = nil
 	created.GroupId = *output.GroupId
-	if err = c.updateSecurityGroupRules(ctx, sg); err != nil {
+	if err = c.UpdateSecurityGroupRules(ctx, sg); err != nil {
 		return &created, err
 	}
 	for _, rule := range sg.Rules {
@@ -731,7 +715,7 @@ func (c *Client) CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*S
 	return &created, nil
 }
 
-func (c *Client) updateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error {
+func (c *Client) UpdateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error {
 	inputIngress := &ec2.UpdateSecurityGroupRuleDescriptionsIngressInput{
 		GroupId: aws.String(sg.GroupId),
 	}
@@ -799,20 +783,6 @@ func (c *Client) DescribeSecurityGroups(ctx context.Context, id *string, tags Ta
 		sgList = append(sgList, sg)
 	}
 	return sgList, nil
-}
-
-func (c *Client) ModifySecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error) {
-	if err := c.updateSecurityGroupRules(ctx, sg); err != nil {
-		return nil, err
-	}
-	list, err := c.DescribeSecurityGroups(ctx, &sg.GroupId, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(list) != 1 {
-		return nil, fmt.Errorf("security group %s not found", sg.GroupId)
-	}
-	return list[0], nil
 }
 
 // DeleteSecurityGroup deletes the security group with the specific <id>. If it does not exist, no error is returned.
@@ -946,7 +916,7 @@ func (c *Client) CreateRouteTable(ctx context.Context, routeTable *RouteTable) (
 	return created, nil
 }
 
-func (c *Client) createRoute(ctx context.Context, routeTableId string, route *Route) error {
+func (c *Client) CreateRoute(ctx context.Context, routeTableId string, route *Route) error {
 	input := &ec2.CreateRouteInput{
 		DestinationCidrBlock: aws.String(route.DestinationCidrBlock),
 		GatewayId:            route.GatewayId,
@@ -957,44 +927,13 @@ func (c *Client) createRoute(ctx context.Context, routeTableId string, route *Ro
 	return err
 }
 
-func (c *Client) deleteRoute(ctx context.Context, routeTableId string, route *Route) error {
+func (c *Client) DeleteRoute(ctx context.Context, routeTableId string, route *Route) error {
 	input := &ec2.DeleteRouteInput{
 		DestinationCidrBlock: aws.String(route.DestinationCidrBlock),
 		RouteTableId:         aws.String(routeTableId),
 	}
 	_, err := c.EC2.DeleteRouteWithContext(ctx, input)
 	return err
-}
-
-func (c *Client) UpdateRouteTable(ctx context.Context, desired, current *RouteTable) (*RouteTable, error) {
-outerDelete:
-	for _, cr := range current.Routes {
-		for _, dr := range desired.Routes {
-			if reflect.DeepEqual(cr, dr) {
-				continue outerDelete
-			}
-		}
-		if err := c.deleteRoute(ctx, current.RouteTableId, cr); err != nil {
-			return nil, err
-		}
-	}
-outerCreate:
-	for _, dr := range desired.Routes {
-		for _, cr := range current.Routes {
-			if reflect.DeepEqual(cr, dr) {
-				continue outerCreate
-			}
-		}
-		if err := c.createRoute(ctx, current.RouteTableId, dr); err != nil {
-			return nil, err
-		}
-	}
-	updated := *current
-	updated.Routes = nil
-	for _, dr := range desired.Routes {
-		updated.Routes = append(updated.Routes, dr)
-	}
-	return &updated, nil
 }
 
 func (c *Client) DescribeRouteTables(ctx context.Context, id *string, tags Tags) ([]*RouteTable, error) {
@@ -1272,7 +1211,7 @@ func (c *Client) CreateIAMInstanceProfile(ctx context.Context, profile *IAMInsta
 	}
 	created := *profile
 	created.RoleName = ""
-	if err = c.addRoleToIAMInstanceProfile(ctx, profileName, profile.RoleName); err != nil {
+	if err = c.AddRoleToIAMInstanceProfile(ctx, profileName, profile.RoleName); err != nil {
 		return &created, err
 	}
 	return c.GetIAMInstanceProfile(ctx, profileName)
@@ -1292,24 +1231,7 @@ func (c *Client) GetIAMInstanceProfile(ctx context.Context, profileName string) 
 	return fromIAMInstanceProfile(output.InstanceProfile), nil
 }
 
-func (c *Client) UpdateIAMInstanceProfile(ctx context.Context, desired, current *IAMInstanceProfile) (*IAMInstanceProfile, error) {
-	if current.RoleName == desired.RoleName {
-		return current, nil
-	}
-	if desired.RoleName != "" {
-		if err := c.addRoleToIAMInstanceProfile(ctx, current.InstanceProfileName, desired.RoleName); err != nil {
-			return nil, err
-		}
-	}
-	if current.RoleName != "" {
-		if err := c.removeRoleFromIAMInstanceProfile(ctx, current.InstanceProfileName, current.RoleName); err != nil {
-			return nil, err
-		}
-	}
-	return c.GetIAMInstanceProfile(ctx, current.InstanceProfileName)
-}
-
-func (c *Client) addRoleToIAMInstanceProfile(ctx context.Context, profileName, roleName string) error {
+func (c *Client) AddRoleToIAMInstanceProfile(ctx context.Context, profileName, roleName string) error {
 	input := &iam.AddRoleToInstanceProfileInput{
 		InstanceProfileName: aws.String(profileName),
 		RoleName:            aws.String(roleName),
@@ -1318,7 +1240,7 @@ func (c *Client) addRoleToIAMInstanceProfile(ctx context.Context, profileName, r
 	return err
 }
 
-func (c *Client) removeRoleFromIAMInstanceProfile(ctx context.Context, profileName, roleName string) error {
+func (c *Client) RemoveRoleFromIAMInstanceProfile(ctx context.Context, profileName, roleName string) error {
 	input := &iam.RemoveRoleFromInstanceProfileInput{
 		InstanceProfileName: aws.String(profileName),
 		RoleName:            aws.String(roleName),

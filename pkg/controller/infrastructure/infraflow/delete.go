@@ -40,12 +40,12 @@ func (rc *ReconcileContext) Delete(ctx context.Context) (*awsapiv1alpha.FlowStat
 func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 	g := flow.NewGraph("AWS infrastructure destruction")
 
-	deleteVPC := rc.config.Networks.VPC.ID == nil && rc.state.hasVPCID()
+	deleteVPC := rc.config.Networks.VPC.ID == nil && rc.state.HasID(IdentiferVPC)
 	destroyLoadBalancersAndSecurityGroups := g.Add(flow.Task{
 		Name: "Destroying Kubernetes load balancers and security groups",
 		Fn: flow.TaskFn(rc.EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted).
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
-			DoIf(rc.state.hasVPCID() && !rc.state.deletedKubernetesLoadBalancersAndSecurityGroups)})
+			DoIf(rc.state.HasID(IdentiferVPC) && !rc.state.IsTaskMarkedCompleted(TaskKeyLoadBalancersAndSecurityGroups))})
 	ensureDeletedVpc := g.Add(flow.Task{
 		Name: "ensure deletion of VPC",
 		Fn: flow.TaskFn(rc.EnsureDeletedVpc).
@@ -57,7 +57,7 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 		Name: "ensure deletion of DHCP options for VPC",
 		Fn: flow.TaskFn(rc.EnsureDeletedDhcpOptions).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
-			DoIf(deleteVPC && !alreadyDeleted(rc.state.dhcpOptionsID)),
+			DoIf(deleteVPC && !rc.state.IsIDAlreadyDeleted(IdentiferDHCPOptions)),
 		Dependencies: flow.NewTaskIDs(ensureDeletedVpc),
 	})
 	unused(ensureDeletedDhcpOptions)
@@ -66,11 +66,11 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 }
 
 func (rc *ReconcileContext) EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted(ctx context.Context) error {
-	if err := DestroyKubernetesLoadBalancersAndSecurityGroups(ctx, rc.client, *rc.state.vpcID, rc.infra.Namespace); err != nil {
+	if err := DestroyKubernetesLoadBalancersAndSecurityGroups(ctx, rc.client, *rc.state.GetID(IdentiferVPC), rc.infra.Namespace); err != nil {
 		return gardencorev1beta1helper.DeprecatedDetermineError(fmt.Errorf("Failed to destroy load balancers and security groups: %w", err))
 	}
 
-	rc.state.deletedKubernetesLoadBalancersAndSecurityGroups = true
+	rc.state.MarkTaskCompleted(TaskKeyLoadBalancersAndSecurityGroups, true)
 
 	return nil
 }
@@ -100,7 +100,7 @@ func DestroyKubernetesLoadBalancersAndSecurityGroups(ctx context.Context, awsCli
 }
 
 func (rc *ReconcileContext) EnsureDeletedVpc(ctx context.Context) error {
-	found, err := rc.client.DescribeVpcs(ctx, rc.state.vpcID, rc.commonTags)
+	found, err := rc.client.DescribeVpcs(ctx, rc.state.GetID(IdentiferVPC), rc.commonTags)
 	if err != nil {
 		return err
 	}
@@ -111,12 +111,12 @@ func (rc *ReconcileContext) EnsureDeletedVpc(ctx context.Context) error {
 		}
 		rc.logger.Info("Deleted VPC", "id", vpc.VpcId)
 	}
-	rc.state.vpcID = deletedMarker
+	rc.state.SetIDAsDeleted(IdentiferVPC)
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureDeletedDhcpOptions(ctx context.Context) error {
-	found, err := rc.client.DescribeVpcDhcpOptions(ctx, rc.state.dhcpOptionsID, rc.commonTags)
+	found, err := rc.client.DescribeVpcDhcpOptions(ctx, rc.state.GetID(IdentiferDHCPOptions), rc.commonTags)
 	if err != nil {
 		return err
 	}

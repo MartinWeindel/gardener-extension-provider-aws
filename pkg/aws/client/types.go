@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"sort"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -61,14 +62,15 @@ type Interface interface {
 	DescribeVpcDhcpOptions(ctx context.Context, id *string, tags Tags) ([]*DhcpOptions, error)
 	DeleteVpcDhcpOptions(ctx context.Context, id string) error
 	CreateVpc(ctx context.Context, vpc *VPC) (*VPC, error)
-	UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error)
+	AddVpcDhcpOptionAssociation(vpcId string, dhcpOptionsId *string) error
+	UpdateVpcAttribute(ctx context.Context, vpcId, attributeName string, value bool) error
 	DeleteVpc(ctx context.Context, id string) error
 	DescribeVpcs(ctx context.Context, id *string, tags Tags) ([]*VPC, error)
 
 	// Security groups
 	CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error)
 	DescribeSecurityGroups(ctx context.Context, id *string, tags Tags) ([]*SecurityGroup, error)
-	ModifySecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error)
+	UpdateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error
 	DeleteSecurityGroup(ctx context.Context, id string) error
 
 	// Internet gateways
@@ -83,9 +85,10 @@ type Interface interface {
 
 	// Route tables
 	CreateRouteTable(ctx context.Context, routeTable *RouteTable) (*RouteTable, error)
-	UpdateRouteTable(ctx context.Context, desired, current *RouteTable) (*RouteTable, error)
 	DescribeRouteTables(ctx context.Context, id *string, tags Tags) ([]*RouteTable, error)
 	DeleteRouteTable(ctx context.Context, id string) error
+	CreateRoute(ctx context.Context, routeTableId string, route *Route) error
+	DeleteRoute(ctx context.Context, routeTableId string, route *Route) error
 
 	// Subnets
 	CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, error)
@@ -119,8 +122,9 @@ type Interface interface {
 	// IAM Instance Profile
 	CreateIAMInstanceProfile(ctx context.Context, profile *IAMInstanceProfile) (*IAMInstanceProfile, error)
 	GetIAMInstanceProfile(ctx context.Context, profileName string) (*IAMInstanceProfile, error)
-	UpdateIAMInstanceProfile(ctx context.Context, desired, current *IAMInstanceProfile) (*IAMInstanceProfile, error)
 	DeleteIAMInstanceProfile(ctx context.Context, profileName string) error
+	AddRoleToIAMInstanceProfile(ctx context.Context, profileName, roleName string) error
+	RemoveRoleFromIAMInstanceProfile(ctx context.Context, profileName, roleName string) error
 
 	// IAM Role Policy
 	PutIAMRolePolicy(ctx context.Context, policy *IAMRolePolicy) error
@@ -170,6 +174,38 @@ type SecurityGroup struct {
 	Rules       []*SecurityGroupRule
 }
 
+func (sg *SecurityGroup) Clone() *SecurityGroup {
+	copy := *sg
+	copy.Rules = copyArray(sg.Rules)
+	return &copy
+}
+
+func (sg *SecurityGroup) SortedClone() *SecurityGroup {
+	copy := sg.Clone()
+	sort.Slice(copy.Rules, func(i, j int) bool {
+		ri := copy.Rules[i].SortedClone()
+		rj := copy.Rules[j].SortedClone()
+		return ri.LessThan(rj)
+	})
+	return copy
+}
+
+func (sg *SecurityGroup) EquivalentRulesTo(other *SecurityGroup) bool {
+	if len(sg.Rules) != len(other.Rules) {
+		return false
+	}
+	a := sg.SortedClone()
+	b := other.SortedClone()
+	for i := range a.Rules {
+		ra := a.Rules[i]
+		rb := b.Rules[i]
+		if ra.LessThan(rb) || rb.LessThan(ra) {
+			return false
+		}
+	}
+	return true
+}
+
 type SecurityGroupRuleType string
 
 const (
@@ -183,6 +219,60 @@ type SecurityGroupRule struct {
 	ToPort     int
 	Protocol   string
 	CidrBlocks []string
+}
+
+func (sgr *SecurityGroupRule) Clone() *SecurityGroupRule {
+	copy := *sgr
+	copy.CidrBlocks = copyArray(sgr.CidrBlocks)
+	return &copy
+}
+
+func (sgr *SecurityGroupRule) SortedClone() *SecurityGroupRule {
+	copy := sgr.Clone()
+	sort.Strings(copy.CidrBlocks)
+	return copy
+}
+
+func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
+	if sgr.Type < other.Type {
+		return true
+	}
+	if sgr.Type > other.Type {
+		return false
+	}
+	if sgr.Protocol < other.Protocol {
+		return true
+	}
+	if sgr.Protocol > other.Protocol {
+		return false
+	}
+	if sgr.FromPort < other.FromPort {
+		return true
+	}
+	if sgr.FromPort > other.FromPort {
+		return false
+	}
+	if sgr.ToPort < other.ToPort {
+		return true
+	}
+	if sgr.ToPort > other.ToPort {
+		return false
+	}
+	if len(sgr.CidrBlocks) < len(other.CidrBlocks) {
+		return true
+	}
+	if len(sgr.CidrBlocks) > len(other.CidrBlocks) {
+		return false
+	}
+	for i := range sgr.CidrBlocks {
+		if sgr.CidrBlocks[i] < other.CidrBlocks[i] {
+			return true
+		}
+		if sgr.CidrBlocks[i] > other.CidrBlocks[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type InternetGateway struct {
