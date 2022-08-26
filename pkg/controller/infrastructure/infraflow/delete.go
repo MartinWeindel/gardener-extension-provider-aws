@@ -28,10 +28,10 @@ import (
 	"github.com/gardener/gardener/pkg/utils/flow"
 )
 
-func (rc *ReconcileContext) Delete() (*awsapiv1alpha.FlowState, error) {
+func (rc *ReconcileContext) Delete(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
 	g := rc.buildDeleteGraph()
 	f := g.Compile()
-	if err := f.Run(rc.ctx, flow.Opts{}); err != nil {
+	if err := f.Run(ctx, flow.Opts{}); err != nil {
 		return rc.UpdatedFlowState(), flow.Causes(err)
 	}
 	return rc.UpdatedFlowState(), nil

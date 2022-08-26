@@ -45,35 +45,16 @@ func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *
 func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
 	log.Info("deleteWithFlow")
 
-	infrastructureConfig := &awsapi.InfrastructureConfig{}
-	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
-		return fmt.Errorf("could not decode provider config: %+v", err)
-	}
-
-	awsClient, err := aws.NewClientFromSecretRef(ctx, a.Client(), infrastructure.Spec.SecretRef, infrastructure.Spec.Region)
-	if err != nil {
-		return fmt.Errorf("failed to create new AWS client: %+v", err)
-	}
-
-	var oldFlowState *awsapi.FlowState
-	if infrastructure.Status.ProviderStatus != nil {
-		infraStatus := &awsapi.InfrastructureStatus{}
-		if _, _, err := a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
-			return fmt.Errorf("could not decode provider status: %+v", err)
-		}
-		oldFlowState = infraStatus.FlowState
-	}
-
-	rctx, err := infraflow.NewReconcileContext(ctx, log, awsClient, infrastructure, infrastructureConfig, oldFlowState, nil)
+	rctx, err := a.createReconcileContext(ctx, log, infrastructure, nil)
 	if err != nil {
 		return err
 	}
-	flowState, err := rctx.Delete()
+	flowState, err := rctx.Delete(ctx)
 	if err != nil {
 		return err
 	}
 
-	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, infrastructureConfig)
+	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, rctx.GetInfrastructureConfig())
 	if err != nil {
 		return err
 	}

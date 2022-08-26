@@ -18,7 +18,6 @@
 package infraflow
 
 import (
-	"context"
 	"fmt"
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
@@ -59,7 +58,6 @@ func alreadyDeleted(id *string) bool {
 }
 
 type ReconcileContext struct {
-	ctx        context.Context
 	infra      *extensionsv1alpha1.Infrastructure
 	config     *awsapi.InfrastructureConfig
 	logger     logr.Logger
@@ -69,11 +67,10 @@ type ReconcileContext struct {
 	state StateWhiteboard
 }
 
-func NewReconcileContext(ctx context.Context, logger logr.Logger, awsClient awsclient.Interface,
+func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 	infra *extensionsv1alpha1.Infrastructure, config *awsapi.InfrastructureConfig,
 	oldFlowState *awsapi.FlowState, tfState *TerraformState) (*ReconcileContext, error) {
 	rc := &ReconcileContext{
-		ctx:    ctx,
 		infra:  infra,
 		config: config,
 		logger: logger,
@@ -115,6 +112,10 @@ func NewReconcileContext(ctx context.Context, logger logr.Logger, awsClient awsc
 	}
 
 	return rc, nil
+}
+
+func (rc *ReconcileContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
+	return rc.config
 }
 
 func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {

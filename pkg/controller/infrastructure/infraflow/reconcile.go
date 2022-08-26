@@ -33,10 +33,10 @@ const (
 	FlowStateVersion1 = "1"
 )
 
-func (rc *ReconcileContext) Reconcile() (*awsapiv1alpha.FlowState, error) {
+func (rc *ReconcileContext) Reconcile(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
 	g := rc.buildReconcileGraph()
 	f := g.Compile()
-	if err := f.Run(rc.ctx, flow.Opts{}); err != nil {
+	if err := f.Run(ctx, flow.Opts{}); err != nil {
 		return rc.UpdatedFlowState(), flow.Causes(err)
 	}
 	return rc.UpdatedFlowState(), nil

@@ -565,7 +565,7 @@ func (c *Client) CreateVpc(ctx context.Context, desired *VPC) (*VPC, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(vpcList) != 1 {
+	if len(vpcList) == 0 {
 		return nil, fmt.Errorf("vpc %s not found", vpcID)
 	}
 	return c.UpdateVpc(ctx, desired, vpcList[0])

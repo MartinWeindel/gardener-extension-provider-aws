@@ -58,58 +58,73 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
 }
 
-func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
-	log.Info("reconcileWithFlow")
+func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure,
+	tfState *infraflow.TerraformState) (*infraflow.ReconcileContext, error) {
 
 	infrastructureConfig := &awsapi.InfrastructureConfig{}
 	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
-		return fmt.Errorf("could not decode provider config: %+v", err)
+		return nil, fmt.Errorf("could not decode provider config: %+v", err)
 	}
 
 	awsClient, err := aws.NewClientFromSecretRef(ctx, a.Client(), infrastructure.Spec.SecretRef, infrastructure.Spec.Region)
 	if err != nil {
-		return fmt.Errorf("failed to create new AWS client: %+v", err)
+		return nil, fmt.Errorf("failed to create new AWS client: %+v", err)
 	}
 
 	var oldFlowState *awsapi.FlowState
 	if infrastructure.Status.ProviderStatus != nil {
 		infraStatus := &awsapi.InfrastructureStatus{}
 		if _, _, err := a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
-			return fmt.Errorf("could not decode provider status: %+v", err)
+			return nil, fmt.Errorf("could not decode provider status: %+v", err)
 		}
 		oldFlowState = infraStatus.FlowState
 	}
 
-	var tfRawState *terraformer.RawState
-	var tfState *infraflow.TerraformState
+	return infraflow.NewReconcileContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, tfState)
+}
+
+func (a *actuator) getTerraformState(infrastructure *extensionsv1alpha1.Infrastructure) (tfRawState *terraformer.RawState, tfState *infraflow.TerraformState, err error) {
 	if infrastructure.Status.State != nil {
 		if tfRawState, err = terraformer.UnmarshalRawState(infrastructure.Status.State); err != nil {
-			return fmt.Errorf("could not decode terraform raw state: %+v", err)
+			err = fmt.Errorf("could not decode terraform raw state: %+v", err)
+			return
 		}
-		data, err := tfRawState.Marshal()
+		var data []byte
+		data, err = tfRawState.Marshal()
 		if err != nil {
-			return fmt.Errorf("could not marshal terraform raw state: %+v", err)
+			err = fmt.Errorf("could not marshal terraform raw state: %+v", err)
+			return
 		}
 		if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
-			return fmt.Errorf("could not decode terraform state: %+v", err)
+			err = fmt.Errorf("could not decode terraform state: %+v", err)
+			return
 		}
 		tfRawState = &terraformer.RawState{
 			Data:     "",
 			Encoding: "utf-8",
 		}
 	}
+	return
+}
 
-	rctx, err := infraflow.NewReconcileContext(ctx, log, awsClient, infrastructure, infrastructureConfig, oldFlowState, tfState)
+func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
+	log.Info("reconcileWithFlow")
+
+	tfRawState, tfState, err := a.getTerraformState(infrastructure)
+	if err != nil {
+		return err
+	}
+	rctx, err := a.createReconcileContext(ctx, log, infrastructure, tfState)
 	if err != nil {
 		return err
 	}
 
-	flowState, err := rctx.Reconcile()
+	flowState, err := rctx.Reconcile(ctx)
 	if err != nil {
 		return err
 	}
 
-	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, infrastructureConfig)
+	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, rctx.GetInfrastructureConfig())
 	if err != nil {
 		return err
 	}
