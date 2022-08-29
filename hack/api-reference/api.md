@@ -528,6 +528,42 @@ string
 </tr>
 <tr>
 <td>
+<code>defaultSecurityGroupId</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>DefaultSecurityGroupId is the id of the created default security group</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>internetGatewayId</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>InternetGatewayId is the id of the created internet gateway</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>vpcEndpointIds</code></br>
+<em>
+map[string]string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>VPCEndpointIds is the mapping VPC endpoint name to created id</p>
+</td>
+</tr>
+<tr>
+<td>
 <code>completedDeletionTasks</code></br>
 <em>
 map[string]bool

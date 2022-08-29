@@ -426,6 +426,9 @@ func autoConvert_v1alpha1_FlowState_To_aws_FlowState(in *FlowState, out *aws.Flo
 	out.Version = in.Version
 	out.DhcpOptionsId = (*string)(unsafe.Pointer(in.DhcpOptionsId))
 	out.VpcId = (*string)(unsafe.Pointer(in.VpcId))
+	out.DefaultSecurityGroupId = (*string)(unsafe.Pointer(in.DefaultSecurityGroupId))
+	out.InternetGatewayId = (*string)(unsafe.Pointer(in.InternetGatewayId))
+	out.VPCEndpointIds = *(*map[string]string)(unsafe.Pointer(&in.VPCEndpointIds))
 	out.CompletedDeletionTasks = *(*map[string]bool)(unsafe.Pointer(&in.CompletedDeletionTasks))
 	return nil
 }
@@ -439,6 +442,9 @@ func autoConvert_aws_FlowState_To_v1alpha1_FlowState(in *aws.FlowState, out *Flo
 	out.Version = in.Version
 	out.DhcpOptionsId = (*string)(unsafe.Pointer(in.DhcpOptionsId))
 	out.VpcId = (*string)(unsafe.Pointer(in.VpcId))
+	out.DefaultSecurityGroupId = (*string)(unsafe.Pointer(in.DefaultSecurityGroupId))
+	out.InternetGatewayId = (*string)(unsafe.Pointer(in.InternetGatewayId))
+	out.VPCEndpointIds = *(*map[string]string)(unsafe.Pointer(&in.VPCEndpointIds))
 	out.CompletedDeletionTasks = *(*map[string]bool)(unsafe.Pointer(&in.CompletedDeletionTasks))
 	return nil
 }

@@ -20,20 +20,17 @@ package infraflow
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
-	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
-	"github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
+	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener/pkg/utils/flow"
-	"k8s.io/utils/pointer"
 )
 
 const (
 	FlowStateVersion1    = "1"
 	defaultRetryInterval = 5 * time.Second
-	defaultRetryTimeout  = 5 * time.Minute
+	defaultRetryTimeout  = 90 * time.Second
 )
 
 func (rc *ReconcileContext) Reconcile(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
@@ -92,69 +89,40 @@ func (rc *ReconcileContext) EnsureDhcpOptions(ctx context.Context) error {
 		dhcpDomainName = fmt.Sprintf("%s.compute.internal", rc.infra.Spec.Region)
 	}
 
-	desired := &client.DhcpOptions{
+	desired := &awsclient.DhcpOptions{
 		Tags: rc.commonTags,
 		DhcpConfigurations: map[string][]string{
 			"domain-name":         {dhcpDomainName},
 			"domain-name-servers": {"AmazonProvidedDNS"},
 		},
 	}
-	found, err := rc.client.DescribeVpcDhcpOptions(ctx, rc.state.GetID(IdentiferDHCPOptions), rc.commonTags)
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferDHCPOptions), rc.commonTags,
+		rc.client.GetVpcDhcpOptions, rc.client.FindVpcDhcpOptionsByTags)
 	if err != nil {
 		return err
 	}
-	switch len(found) {
-	case 1:
-		rc.state.SetID(IdentiferDHCPOptions, found[0].DhcpOptionsId)
-		if err = rc.ensureEC2Tags(ctx, found[0].DhcpOptionsId, found[0].Tags); err != nil {
+	if current != nil {
+		rc.state.SetID(IdentiferDHCPOptions, current.DhcpOptionsId)
+		if _, err := rc.updater.UpdateEC2Tags(ctx, current.DhcpOptionsId, rc.commonTags, current.Tags); err != nil {
 			return err
 		}
-	case 0:
+	} else {
 		created, err := rc.client.CreateVpcDhcpOptions(ctx, desired)
 		if err != nil {
 			return err
 		}
 		rc.state.SetID(IdentiferDHCPOptions, created.DhcpOptionsId)
-	default:
-		return fmt.Errorf("multiple DHCP options found by tags: %d", len(found))
 	}
 
-	return nil
-}
-
-func (rc *ReconcileContext) ensureEC2Tags(ctx context.Context, id string, current client.Tags) error {
-	toBeDeleted := client.Tags{}
-	toBeCreated := client.Tags{}
-	for k, v := range current {
-		if cv, ok := rc.commonTags[k]; ok {
-			if cv != v {
-				toBeDeleted[k] = v
-				toBeCreated[k] = cv
-			}
-		} else if !ignoreTag(rc.config.IgnoreTags, k) {
-			toBeDeleted[k] = v
-		}
-	}
-
-	if len(toBeDeleted) > 0 {
-		if err := rc.client.DeleteEC2Tags(ctx, []string{id}, toBeDeleted); err != nil {
-			return err
-		}
-	}
-	if len(toBeCreated) > 0 {
-		if err := rc.client.CreateEC2Tags(ctx, []string{id}, toBeCreated); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureVpc(ctx context.Context) error {
 	if rc.config.Networks.VPC.ID != nil {
 		rc.state.SetIDPtr(IdentiferVPC, rc.config.Networks.VPC.ID)
-		return rc.ensureExistingVpc(ctx, rc.config.Networks.VPC.ID)
+		return rc.ensureExistingVpc(ctx, *rc.config.Networks.VPC.ID)
 	}
-	desired := &client.VPC{
+	desired := &awsclient.VPC{
 		Tags:               rc.commonTags,
 		EnableDnsSupport:   true,
 		EnableDnsHostnames: true,
@@ -164,99 +132,160 @@ func (rc *ReconcileContext) EnsureVpc(ctx context.Context) error {
 		return fmt.Errorf("missing VPC CIDR")
 	}
 	desired.CidrBlock = *rc.config.Networks.VPC.CIDR
-	found, err := rc.client.DescribeVpcs(ctx, rc.state.GetID(IdentiferVPC), rc.commonTags)
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferVPC), rc.commonTags,
+		rc.client.GetVpc, rc.client.FindVpcsByTags)
 	if err != nil {
 		return err
 	}
-	switch len(found) {
-	case 1:
-		rc.state.SetID(IdentiferVPC, found[0].VpcId)
-		if _, err := rc.updater.UpdateVpc(ctx, desired, found[0]); err != nil {
+
+	if current != nil {
+		rc.state.SetID(IdentiferVPC, current.VpcId)
+		if _, err := rc.updater.UpdateVpc(ctx, desired, current); err != nil {
 			return err
 		}
-		if err = rc.ensureEC2Tags(ctx, found[0].VpcId, found[0].Tags); err != nil {
-			return err
-		}
-	case 0:
-		created, err := rc.client.CreateVpc(ctx, desired)
-		if err != nil {
-			return err
-		}
-		rc.state.SetID(IdentiferVPC, created.VpcId)
-		if _, err := rc.updater.UpdateVpc(ctx, desired, created); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("multiple VPCs found by tags: %d", len(found))
+		return nil
 	}
 
+	created, err := rc.client.CreateVpc(ctx, desired)
+	if err != nil {
+		return err
+	}
+	rc.state.SetID(IdentiferVPC, created.VpcId)
+	if _, err := rc.updater.UpdateVpc(ctx, desired, created); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (rc *ReconcileContext) ensureExistingVpc(ctx context.Context, vpcID *string) error {
-	found, err := rc.client.DescribeVpcs(ctx, vpcID, nil)
+func (rc *ReconcileContext) ensureExistingVpc(ctx context.Context, vpcID string) error {
+	current, err := rc.client.GetVpc(ctx, vpcID)
 	if err != nil {
 		return err
 	}
-	if len(found) == 0 {
-		return fmt.Errorf("VPC %s has not been found", *vpcID)
+	if current != nil {
+		return fmt.Errorf("VPC %s has not been found", vpcID)
 	}
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureDefaultSecurityGroup(ctx context.Context) error {
-	desired := &client.SecurityGroup{
-		VpcId:       rc.state.GetID(IdentiferVPC),
-		GroupName:   "default",
-		Description: pointer.String("default VPC security group"),
-	}
-	found, err := rc.client.DescribeSecurityGroups(ctx, rc.state.GetID(IdentiferDefaultSG), rc.commonTags)
+	current, err := rc.client.FindDefaultSecurityGroupByVpcId(ctx, *rc.state.GetID(IdentiferVPC))
 	if err != nil {
 		return err
 	}
-	var current *client.SecurityGroup
-	for _, item := range found {
-		if item.GroupName == "default" {
-			current = item
-			break
-		}
+	if current == nil {
+		return fmt.Errorf("default security group not found")
 	}
-	if current != nil {
-		rc.state.SetID(IdentiferDefaultSG, current.GroupId)
-		if _, err := rc.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
-			return err
-		}
-		return nil
-	}
-	created, err := rc.client.CreateSecurityGroup(ctx, desired)
-	if err != nil {
+
+	rc.state.SetID(IdentiferDefaultSecurityGroup, current.GroupId)
+	desired := current.Clone()
+	desired.Tags = rc.commonTags
+	desired.Rules = nil
+	if _, err := rc.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
 		return err
 	}
-	rc.state.SetID(IdentiferDefaultSG, created.GroupId)
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureInternetGateway(ctx context.Context) error {
-	return fmt.Errorf("todo")
+	desired := &awsclient.InternetGateway{
+		Tags:  rc.commonTags,
+		VpcId: rc.state.GetID(IdentiferVPC),
+	}
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferInternetGateway), rc.commonTags,
+		rc.client.GetInternetGateway, rc.client.FindInternetGatewaysByTags)
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		rc.state.SetID(IdentiferInternetGateway, current.InternetGatewayId)
+		if err := rc.client.AttachInternetGateway(ctx, *rc.state.GetID(IdentiferVPC), current.InternetGatewayId); err != nil {
+			return err
+		}
+		if _, err := rc.updater.UpdateEC2Tags(ctx, current.InternetGatewayId, rc.commonTags, current.Tags); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	created, err := rc.client.CreateInternetGateway(ctx, desired)
+	if err != nil {
+		return err
+	}
+	rc.state.SetID(IdentiferInternetGateway, created.InternetGatewayId)
+	if err := rc.client.AttachInternetGateway(ctx, *rc.state.GetID(IdentiferVPC), created.InternetGatewayId); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (rc *ReconcileContext) EnsureGatewayEndpoints(ctx context.Context) error {
-	return fmt.Errorf("todo")
+	child := rc.state.GetChild(ChildIdVPCEndpoints)
+	var desired []*awsclient.VpcEndpoint
+	for _, endpoint := range rc.config.Networks.VPC.GatewayEndpoints {
+		desired = append(desired, &awsclient.VpcEndpoint{
+			Tags:        rc.commonTagsWithSuffix(fmt.Sprintf("gw-%s", endpoint)),
+			VpcId:       rc.state.GetID(IdentiferVPC),
+			ServiceName: rc.vpcEndpointServiceNamePrefix() + endpoint,
+		})
+	}
+	current, err := rc.collectExistingVPCEndpoints(ctx)
+	if err != nil {
+		return err
+	}
+
+	toBeDeleted, toBeCreated, toBeChecked := diffByID(desired, current, rc.extractVpcEndpointName)
+	for _, item := range toBeDeleted {
+		if err := rc.client.DeleteVpcEndpoint(ctx, item.VpcEndpointId); err != nil {
+			return err
+		}
+		child.SetIDPtr(rc.extractVpcEndpointName(item), nil)
+	}
+	for _, item := range toBeCreated {
+		created, err := rc.client.CreateVpcEndpoint(ctx, item)
+		if err != nil {
+			return err
+		}
+		child.SetID(rc.extractVpcEndpointName(item), created.VpcEndpointId)
+		if _, err := rc.updater.UpdateEC2Tags(ctx, created.VpcEndpointId, item.Tags, created.Tags); err != nil {
+			return err
+		}
+	}
+	for _, item := range toBeChecked {
+		commonTags := rc.commonTagsWithSuffix(fmt.Sprintf("gw-%s", rc.extractVpcEndpointName(item)))
+		if _, err := rc.updater.UpdateEC2Tags(ctx, item.VpcEndpointId, commonTags, item.Tags); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func ignoreTag(ignoreTags *awsapi.IgnoreTags, key string) bool {
-	if ignoreTags == nil {
-		return false
+func (rc *ReconcileContext) collectExistingVPCEndpoints(ctx context.Context) ([]*awsclient.VpcEndpoint, error) {
+	child := rc.state.GetChild(ChildIdVPCEndpoints)
+	var ids []string
+	for _, id := range child.GetIDMap() {
+		ids = append(ids, id)
 	}
-	for _, ignoreKey := range ignoreTags.Keys {
-		if ignoreKey == key {
-			return true
+	var current []*awsclient.VpcEndpoint
+	if len(ids) > 0 {
+		found, err := rc.client.GetVpcEndpoints(ctx, ids)
+		if err != nil {
+			return nil, err
 		}
+		current = found
 	}
-	for _, ignoreKeyPrefix := range ignoreTags.KeyPrefixes {
-		if strings.HasPrefix(key, ignoreKeyPrefix) {
-			return true
+	foundByTags, err := rc.client.FindVpcEndpointsByTags(ctx, rc.clusterTags())
+	if err != nil {
+		return nil, err
+	}
+outer:
+	for _, item := range foundByTags {
+		for _, currentItem := range current {
+			if item.VpcEndpointId == currentItem.VpcEndpointId {
+				continue outer
+			}
 		}
+		current = append(current, item)
 	}
-	return false
+	return current, nil
 }

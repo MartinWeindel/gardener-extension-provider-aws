@@ -178,6 +178,12 @@ type FlowState struct {
 	DhcpOptionsId *string
 	// VpcId is the created AWS VPC id if vpc was created
 	VpcId *string
+	// DefaultSecurityGroupId is the id of the created default security group
+	DefaultSecurityGroupId *string
+	// InternetGatewayId is the id of the created internet gateway
+	InternetGatewayId *string
+	// VPCEndpointIds is the mapping VPC endpoint name to created id
+	VPCEndpointIds map[string]string
 
 	// CompletedDeletionTasks records completed deletion tasks
 	CompletedDeletionTasks map[string]bool

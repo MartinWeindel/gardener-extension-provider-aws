@@ -46,12 +46,31 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 		Fn: flow.TaskFn(rc.EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted).
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
 			DoIf(rc.state.HasID(IdentiferVPC) && !rc.state.IsTaskMarkedCompleted(TaskKeyLoadBalancersAndSecurityGroups))})
+	ensureDeleteGatewayEndpoints := g.Add(flow.Task{
+		Name: "ensure deletion of gateway endpoints",
+		Fn: flow.TaskFn(rc.EnsureDeletedGatewayEndpoints).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	ensureDeleteInternetGateway := g.Add(flow.Task{
+		Name: "ensure deletion of internet gateway",
+		Fn: flow.TaskFn(rc.EnsureDeletedInternetGateway).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
+			DoIf(deleteVPC),
+		Dependencies: flow.NewTaskIDs(ensureDeleteGatewayEndpoints),
+	})
+	ensureDeleteDefaultSecurityGroup := g.Add(flow.Task{
+		Name: "ensure deletion of default security group",
+		Fn: flow.TaskFn(rc.EnsureDeletedDefaultSecurityGroup).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
+			DoIf(deleteVPC),
+		Dependencies: flow.NewTaskIDs(ensureDeleteGatewayEndpoints),
+	})
 	ensureDeletedVpc := g.Add(flow.Task{
 		Name: "ensure deletion of VPC",
 		Fn: flow.TaskFn(rc.EnsureDeletedVpc).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(destroyLoadBalancersAndSecurityGroups),
+		Dependencies: flow.NewTaskIDs(ensureDeleteInternetGateway, ensureDeleteDefaultSecurityGroup, destroyLoadBalancersAndSecurityGroups),
 	})
 	ensureDeletedDhcpOptions := g.Add(flow.Task{
 		Name: "ensure deletion of DHCP options for VPC",
@@ -99,34 +118,82 @@ func DestroyKubernetesLoadBalancersAndSecurityGroups(ctx context.Context, awsCli
 	return nil
 }
 
-func (rc *ReconcileContext) EnsureDeletedVpc(ctx context.Context) error {
-	found, err := rc.client.DescribeVpcs(ctx, rc.state.GetID(IdentiferVPC), rc.commonTags)
+func (rc *ReconcileContext) EnsureDeletedDefaultSecurityGroup(ctx context.Context) error {
+	// nothing to do, it is deleted automatically together with VPC
+	rc.state.SetIDAsDeleted(IdentiferDefaultSecurityGroup)
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedInternetGateway(ctx context.Context) error {
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferInternetGateway), rc.commonTags,
+		rc.client.GetInternetGateway, rc.client.FindInternetGatewaysByTags)
 	if err != nil {
 		return err
 	}
-	for _, vpc := range found {
-		rc.logger.Info("Deleting VPC", "id", vpc.VpcId)
-		if err := rc.client.DeleteVpc(ctx, vpc.VpcId); err != nil {
+	if current != nil {
+		if err := rc.client.DetachInternetGateway(ctx, *rc.state.GetID(IdentiferVPC), current.InternetGatewayId); err != nil {
 			return err
 		}
-		rc.logger.Info("Deleted VPC", "id", vpc.VpcId)
+		if err := rc.client.DeleteInternetGateway(ctx, current.InternetGatewayId); err != nil {
+			return err
+		}
+		rc.state.SetIDAsDeleted(IdentiferInternetGateway)
+		rc.logger.Info("Deleted internet gateway", "id", current.InternetGatewayId)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedGatewayEndpoints(ctx context.Context) error {
+	child := rc.state.GetChild(ChildIdVPCEndpoints)
+	current, err := rc.collectExistingVPCEndpoints(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range current {
+		if err := rc.client.DeleteVpcEndpoint(ctx, item.VpcEndpointId); err != nil {
+			return err
+		}
+		name := rc.extractVpcEndpointName(item)
+		child.SetIDAsDeleted(name)
+		rc.logger.Info("Deleted VPC endpoint", "id", item.VpcEndpointId, "name", name)
+	}
+	// update state of endpoints in state, but not found
+	for _, key := range child.GetIDKeys() {
+		child.SetIDAsDeleted(key)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedVpc(ctx context.Context) error {
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferVPC), rc.commonTags,
+		rc.client.GetVpc, rc.client.FindVpcsByTags)
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		rc.logger.Info("Deleting VPC", "id", current.VpcId)
+		if err := rc.client.DeleteVpc(ctx, current.VpcId); err != nil {
+			return err
+		}
+		rc.logger.Info("Deleted VPC", "id", current.VpcId)
 	}
 	rc.state.SetIDAsDeleted(IdentiferVPC)
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureDeletedDhcpOptions(ctx context.Context) error {
-	found, err := rc.client.DescribeVpcDhcpOptions(ctx, rc.state.GetID(IdentiferDHCPOptions), rc.commonTags)
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferDHCPOptions), rc.commonTags,
+		rc.client.GetVpcDhcpOptions, rc.client.FindVpcDhcpOptionsByTags)
 	if err != nil {
 		return err
 	}
-	for _, options := range found {
-		rc.logger.Info("Deleting DHCP options", "id", options.DhcpOptionsId)
-		if err := rc.client.DeleteVpcDhcpOptions(ctx, options.DhcpOptionsId); err != nil {
+	if current != nil {
+		rc.logger.Info("Deleting DHCP options", "id", current.DhcpOptionsId)
+		if err := rc.client.DeleteVpcDhcpOptions(ctx, current.DhcpOptionsId); err != nil {
 			return err
 		}
-		rc.logger.Info("Deleted VPC", "id", options.DhcpOptionsId)
+		rc.logger.Info("Deleted VPC", "id", current.DhcpOptionsId)
 	}
 	return nil
-
 }

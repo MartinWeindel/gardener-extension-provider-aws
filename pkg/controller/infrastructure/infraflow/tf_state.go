@@ -84,6 +84,39 @@ func (ts *TerraformState) FindManagedResourceInstances(tfType, name string) []TF
 	return nil
 }
 
+func (ts *TerraformState) FindManagedResourcesByType(tfType string) []*TFResource {
+	var result []*TFResource
+	for i := range ts.Resources {
+		resource := &ts.Resources[i]
+		if resource.Mode == ModeManaged && resource.Type == tfType {
+			result = append(result, resource)
+		}
+	}
+	return result
+}
+
+func (ts *TerraformState) GetManagedResourceInstanceID(tfType, name string) *string {
+	instances := ts.FindManagedResourceInstances(tfType, name)
+	if instances != nil && len(instances) == 1 {
+		if value, ok := AttributeAsString(instances[0].Attributes, AttributeKeyId); ok {
+			return &value
+		}
+	}
+	return nil
+}
+
+func (ts *TerraformState) GetManagedResourceInstances(tfType string) map[string]string {
+	result := map[string]string{}
+	for _, item := range ts.FindManagedResourcesByType(tfType) {
+		if item.Instances != nil && len(item.Instances) == 1 {
+			if value, ok := AttributeAsString(item.Instances[0].Attributes, AttributeKeyId); ok {
+				result[item.Name] = value
+			}
+		}
+	}
+	return result
+}
+
 func AttributeAsString(attributes map[string]interface{}, key string) (svalue string, found bool) {
 	if attributes == nil {
 		return

@@ -95,31 +95,43 @@ func migrateTerraformStateToFlowState(state *runtime.RawExtension) (*awsapi.Flow
 		err        error
 	)
 
-	if state != nil {
-		if tfRawState, err = getTerraformerRawState(state); err != nil {
-			return nil, err
-		}
-		data, err := tfRawState.Marshal()
-		if err != nil {
-			return nil, fmt.Errorf("could not marshal terraform raw state: %+v", err)
-		}
-		if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
-			return nil, fmt.Errorf("could not decode terraform state: %+v", err)
-		}
-	}
 	flowState := &awsapi.FlowState{
 		Version: infraflow.FlowStateVersion1,
+	}
+
+	if state == nil {
+		return flowState, nil
+	}
+
+	if tfRawState, err = getTerraformerRawState(state); err != nil {
+		return nil, err
+	}
+	data, err := tfRawState.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("could not marshal terraform raw state: %+v", err)
+	}
+	if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
+		return nil, fmt.Errorf("could not decode terraform state: %+v", err)
+	}
+
+	if tfState.Outputs == nil {
+		return flowState, nil
 	}
 
 	value := tfState.Outputs[aws.VPCIDKey].Value
 	if value != "" {
 		flowState.VpcId = &value
 	}
-	instances := tfState.FindManagedResourceInstances("aws_vpc_dhcp_options", "vpc_dhcp_options")
-	if instances != nil && len(instances) == 1 {
-		if value, ok := infraflow.AttributeAsString(instances[0].Attributes, infraflow.AttributeKeyId); ok {
-			flowState.DhcpOptionsId = &value
+	flowState.DhcpOptionsId = tfState.GetManagedResourceInstanceID("aws_vpc_dhcp_options", "vpc_dhcp_options")
+	flowState.DefaultSecurityGroupId = tfState.GetManagedResourceInstanceID("aws_default_security_group", "default")
+	flowState.InternetGatewayId = tfState.GetManagedResourceInstanceID("aws_internet_gateway", "igw")
+
+	if instances := tfState.GetManagedResourceInstances("aws_vpc_endpoint"); len(instances) > 0 {
+		mappedInstances := map[string]string{}
+		for name, id := range instances {
+			mappedInstances[strings.TrimPrefix(name, "vpc_gwep_")] = id
 		}
+		flowState.VPCEndpointIds = mappedInstances
 	}
 
 	return flowState, nil

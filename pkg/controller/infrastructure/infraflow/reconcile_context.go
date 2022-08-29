@@ -19,6 +19,7 @@ package infraflow
 
 import (
 	"fmt"
+	"strings"
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
@@ -33,9 +34,14 @@ const (
 	TagKeyClusterTemplate                 = "kubernetes.io/cluster/%s"
 	TaskKeyLoadBalancersAndSecurityGroups = "LoadBalancersAndSecurityGroups"
 
-	IdentiferVPC         = "VPC"
-	IdentiferDHCPOptions = "DHCPOptions"
-	IdentiferDefaultSG   = "DefaultSecurityGroup"
+	TagValueCluster = "1"
+
+	IdentiferVPC                  = "VPC"
+	IdentiferDHCPOptions          = "DHCPOptions"
+	IdentiferDefaultSecurityGroup = "DefaultSecurityGroup"
+	IdentiferInternetGateway      = "InternetGateway"
+
+	ChildIdVPCEndpoints = "VPCEndpoints"
 )
 
 type ReconcileContext struct {
@@ -57,11 +63,12 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 		config:  config,
 		logger:  logger,
 		client:  awsClient,
-		updater: awsclient.NewUpdater(awsClient),
-		commonTags: awsclient.Tags{
-			fmt.Sprintf(TagKeyClusterTemplate, infra.Namespace): "1",
-			TagKeyName: infra.Namespace,
-		},
+		updater: awsclient.NewUpdater(awsClient, config.IgnoreTags),
+		state:   state.NewWhiteboard(),
+	}
+	rc.commonTags = awsclient.Tags{
+		rc.tagKeyCluster(): TagValueCluster,
+		TagKeyName:         infra.Namespace,
 	}
 
 	if oldFlowState != nil && oldFlowState.Version != FlowStateVersion1 {
@@ -73,6 +80,14 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 	} else if oldFlowState != nil {
 		rc.state.SetIDPtr(IdentiferVPC, oldFlowState.VpcId)
 		rc.state.SetIDPtr(IdentiferDHCPOptions, oldFlowState.DhcpOptionsId)
+		rc.state.SetIDPtr(IdentiferDefaultSecurityGroup, oldFlowState.DefaultSecurityGroupId)
+		rc.state.SetIDPtr(IdentiferInternetGateway, oldFlowState.InternetGatewayId)
+		if oldFlowState.VPCEndpointIds != nil {
+			child := rc.state.GetChild(ChildIdVPCEndpoints)
+			for k, v := range oldFlowState.VPCEndpointIds {
+				child.SetID(k, v)
+			}
+		}
 	}
 
 	if oldFlowState != nil && oldFlowState.CompletedDeletionTasks != nil {
@@ -86,11 +101,34 @@ func (rc *ReconcileContext) GetInfrastructureConfig() *awsapi.InfrastructureConf
 	return rc.config
 }
 
+func (rc *ReconcileContext) commonTagsWithSuffix(suffix string) awsclient.Tags {
+	tags := rc.commonTags.Clone()
+	tags[TagKeyName] = fmt.Sprintf("%s-%s", rc.infra.Namespace, suffix)
+	return tags
+}
+
+func (rc *ReconcileContext) tagKeyCluster() string {
+	return fmt.Sprintf(TagKeyClusterTemplate, rc.infra.Namespace)
+}
+
+func (rc *ReconcileContext) clusterTags() awsclient.Tags {
+	tags := awsclient.Tags{}
+	tags[rc.tagKeyCluster()] = TagValueCluster
+	return tags
+}
+
 func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
 	newFlowState := &awsapiv1alpha.FlowState{
-		Version:       FlowStateVersion1,
-		DhcpOptionsId: rc.state.GetID(IdentiferDHCPOptions),
-		VpcId:         rc.state.GetID(IdentiferVPC),
+		Version:                FlowStateVersion1,
+		DhcpOptionsId:          rc.state.GetID(IdentiferDHCPOptions),
+		VpcId:                  rc.state.GetID(IdentiferVPC),
+		DefaultSecurityGroupId: rc.state.GetID(IdentiferDefaultSecurityGroup),
+		InternetGatewayId:      rc.state.GetID(IdentiferInternetGateway),
+	}
+
+	if rc.state.HasChild(ChildIdVPCEndpoints) {
+		child := rc.state.GetChild(ChildIdVPCEndpoints)
+		newFlowState.VPCEndpointIds = child.GetIDMap()
 	}
 
 	completedDeletionTasks := map[string]bool{}
@@ -102,4 +140,12 @@ func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
 	}
 
 	return newFlowState
+}
+
+func (rc *ReconcileContext) vpcEndpointServiceNamePrefix() string {
+	return fmt.Sprintf("com.amazonaws.%s.", rc.infra.Spec.Region)
+}
+
+func (rc *ReconcileContext) extractVpcEndpointName(item *awsclient.VpcEndpoint) string {
+	return strings.TrimPrefix(item.ServiceName, rc.vpcEndpointServiceNamePrefix())
 }

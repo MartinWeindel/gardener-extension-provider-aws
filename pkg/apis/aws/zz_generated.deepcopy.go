@@ -172,6 +172,23 @@ func (in *FlowState) DeepCopyInto(out *FlowState) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.DefaultSecurityGroupId != nil {
+		in, out := &in.DefaultSecurityGroupId, &out.DefaultSecurityGroupId
+		*out = new(string)
+		**out = **in
+	}
+	if in.InternetGatewayId != nil {
+		in, out := &in.InternetGatewayId, &out.InternetGatewayId
+		*out = new(string)
+		**out = **in
+	}
+	if in.VPCEndpointIds != nil {
+		in, out := &in.VPCEndpointIds, &out.VPCEndpointIds
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.CompletedDeletionTasks != nil {
 		in, out := &in.CompletedDeletionTasks, &out.CompletedDeletionTasks
 		*out = make(map[string]bool, len(*in))

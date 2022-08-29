@@ -190,6 +190,15 @@ type FlowState struct {
 	// VpcId is the created AWS VPC id if vpc was created
 	// +optional
 	VpcId *string `json:"vpcId,omitempty"`
+	// DefaultSecurityGroupId is the id of the created default security group
+	// +optional
+	DefaultSecurityGroupId *string `json:"defaultSecurityGroupId,omitempty"`
+	// InternetGatewayId is the id of the created internet gateway
+	// +optional
+	InternetGatewayId *string `json:"internetGatewayId,omitempty"`
+	// VPCEndpointIds is the mapping VPC endpoint name to created id
+	// +optional
+	VPCEndpointIds map[string]string `json:"vpcEndpointIds,omitempty"`
 
 	// CompletedDeletionTasks records completed deletion tasks
 	// +optional

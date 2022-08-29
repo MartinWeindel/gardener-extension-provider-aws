@@ -59,28 +59,36 @@ type Interface interface {
 
 	// VPCs
 	CreateVpcDhcpOptions(ctx context.Context, options *DhcpOptions) (*DhcpOptions, error)
-	DescribeVpcDhcpOptions(ctx context.Context, id *string, tags Tags) ([]*DhcpOptions, error)
+	GetVpcDhcpOptions(ctx context.Context, id string) (*DhcpOptions, error)
+	FindVpcDhcpOptionsByTags(ctx context.Context, tags Tags) ([]*DhcpOptions, error)
 	DeleteVpcDhcpOptions(ctx context.Context, id string) error
 	CreateVpc(ctx context.Context, vpc *VPC) (*VPC, error)
 	AddVpcDhcpOptionAssociation(vpcId string, dhcpOptionsId *string) error
 	UpdateVpcAttribute(ctx context.Context, vpcId, attributeName string, value bool) error
 	DeleteVpc(ctx context.Context, id string) error
-	DescribeVpcs(ctx context.Context, id *string, tags Tags) ([]*VPC, error)
+	GetVpc(ctx context.Context, id string) (*VPC, error)
+	FindVpcsByTags(ctx context.Context, tags Tags) ([]*VPC, error)
 
 	// Security groups
 	CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*SecurityGroup, error)
-	DescribeSecurityGroups(ctx context.Context, id *string, tags Tags) ([]*SecurityGroup, error)
+	GetSecurityGroup(ctx context.Context, id string) (*SecurityGroup, error)
+	FindSecurityGroupsByTags(ctx context.Context, tags Tags) ([]*SecurityGroup, error)
+	FindDefaultSecurityGroupByVpcId(ctx context.Context, vpcId string) (*SecurityGroup, error)
 	UpdateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error
 	DeleteSecurityGroup(ctx context.Context, id string) error
 
 	// Internet gateways
 	CreateInternetGateway(ctx context.Context, gateway *InternetGateway) (*InternetGateway, error)
-	DescribeInternetGateways(ctx context.Context, id *string, tags Tags) ([]*InternetGateway, error)
+	GetInternetGateway(ctx context.Context, id string) (*InternetGateway, error)
+	FindInternetGatewaysByTags(ctx context.Context, tags Tags) ([]*InternetGateway, error)
 	DeleteInternetGateway(ctx context.Context, id string) error
+	AttachInternetGateway(ctx context.Context, vpcId, internetGatewayId string) error
+	DetachInternetGateway(ctx context.Context, vpcId, internetGatewayId string) error
 
 	// VPC Endpoints
 	CreateVpcEndpoint(ctx context.Context, endpoint *VpcEndpoint) (*VpcEndpoint, error)
-	DescribeVpcEndpoints(ctx context.Context, id *string, tags Tags) ([]*VpcEndpoint, error)
+	GetVpcEndpoints(ctx context.Context, ids []string) ([]*VpcEndpoint, error)
+	FindVpcEndpointsByTags(ctx context.Context, tags Tags) ([]*VpcEndpoint, error)
 	DeleteVpcEndpoint(ctx context.Context, id string) error
 
 	// Route tables
@@ -168,8 +176,8 @@ type VPC struct {
 type SecurityGroup struct {
 	Tags
 	GroupId     string
-	VpcId       *string
 	GroupName   string
+	VpcId       *string
 	Description *string
 	Rules       []*SecurityGroupRule
 }
@@ -278,20 +286,20 @@ func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
 type InternetGateway struct {
 	Tags
 	InternetGatewayId string
-	VpcId             string
+	VpcId             *string
 }
 
 type VpcEndpoint struct {
 	Tags
 	VpcEndpointId string
-	VpcId         string
+	VpcId         *string
 	ServiceName   string
 }
 
 type RouteTable struct {
 	Tags
 	RouteTableId string
-	VpcId        string
+	VpcId        *string
 	Routes       []*Route
 }
 

@@ -18,6 +18,7 @@
 package state
 
 import (
+	"sort"
 	"sync"
 )
 
@@ -26,20 +27,30 @@ const (
 )
 
 type Whiteboard interface {
+	IsEmpty() bool
+
+	GetChild(key string) Whiteboard
+	HasChild(key string) bool
+	GetChildrenKeys() []string
+
 	GetID(key string) *string
 	HasID(key string) bool
 	SetID(key, id string)
 	SetIDPtr(key string, id *string)
 	IsIDAlreadyDeleted(key string) bool
 	SetIDAsDeleted(key string)
+	GetIDKeys() []string
+	GetIDMap() map[string]string
 
 	IsTaskMarkedCompleted(key string) bool
 	MarkTaskCompleted(key string, completed bool)
+	GetMarkTaskCompletedKeys() []string
 }
 
 type whiteboard struct {
 	sync.Mutex
 
+	children  map[string]*whiteboard
 	ids       map[string]string
 	completed map[string]bool
 }
@@ -47,10 +58,84 @@ type whiteboard struct {
 var _ Whiteboard = &whiteboard{}
 
 func NewWhiteboard() Whiteboard {
+	return newWhiteboard()
+}
+
+func newWhiteboard() *whiteboard {
 	return &whiteboard{
+		children:  map[string]*whiteboard{},
 		ids:       map[string]string{},
 		completed: map[string]bool{},
 	}
+}
+
+func (w *whiteboard) IsEmpty() bool {
+	w.Lock()
+	defer w.Unlock()
+
+	if len(w.ids) != 0 || len(w.completed) != 0 {
+		return false
+	}
+	for _, child := range w.children {
+		if !child.IsEmpty() {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *whiteboard) GetChild(key string) Whiteboard {
+	w.Lock()
+	defer w.Unlock()
+
+	child := w.children[key]
+	if child == nil {
+		child = newWhiteboard()
+		w.children[key] = child
+	}
+	return child
+}
+
+func (w *whiteboard) HasChild(key string) bool {
+	w.Lock()
+	defer w.Unlock()
+
+	child := w.children[key]
+	return child != nil && !child.IsEmpty()
+}
+
+func (w *whiteboard) GetChildrenKeys() []string {
+	w.Lock()
+	defer w.Unlock()
+
+	return sortedKeys(w.children)
+}
+
+func (w *whiteboard) GetIDKeys() []string {
+	w.Lock()
+	defer w.Unlock()
+
+	return sortedKeys(w.ids)
+}
+
+func (w *whiteboard) GetIDMap() map[string]string {
+	w.Lock()
+	defer w.Unlock()
+
+	m := map[string]string{}
+	for key, value := range w.ids {
+		if value != "" && value != deleted {
+			m[key] = value
+		}
+	}
+	return m
+}
+
+func (w *whiteboard) GetMarkTaskCompletedKeys() []string {
+	w.Lock()
+	defer w.Unlock()
+
+	return sortedKeys(w.completed)
 }
 
 func (w *whiteboard) GetID(key string) *string {
@@ -109,4 +194,13 @@ func (w *whiteboard) MarkTaskCompleted(key string, completed bool) {
 	w.Lock()
 	defer w.Unlock()
 	w.completed[key] = completed
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

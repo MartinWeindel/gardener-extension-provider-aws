@@ -21,8 +21,10 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 )
 
 type Updater interface {
@@ -30,15 +32,18 @@ type Updater interface {
 	UpdateSecurityGroup(ctx context.Context, desired, current *SecurityGroup) (*SecurityGroup, error)
 	UpdateRouteTable(ctx context.Context, desired, current *RouteTable) (*RouteTable, error)
 	UpdateIAMInstanceProfile(ctx context.Context, desired, current *IAMInstanceProfile) (*IAMInstanceProfile, error)
+	UpdateEC2Tags(ctx context.Context, id string, desired, current Tags) (Tags, error)
 }
 
 type updater struct {
-	client Interface
+	client     Interface
+	ignoreTags *awsapi.IgnoreTags
 }
 
-func NewUpdater(client Interface) Updater {
+func NewUpdater(client Interface, ignoreTags *awsapi.IgnoreTags) Updater {
 	return &updater{
-		client: client,
+		client:     client,
+		ignoreTags: ignoreTags,
 	}
 }
 
@@ -46,7 +51,7 @@ func (u *updater) UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, e
 	if desired.CidrBlock != current.CidrBlock {
 		return nil, fmt.Errorf("cannot change CIDR block")
 	}
-	new, err := u.updateVpcAttributes(ctx, desired, current)
+	updated, err := u.updateVpcAttributes(ctx, desired, current)
 	if err != nil {
 		return nil, err
 	}
@@ -54,26 +59,32 @@ func (u *updater) UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, e
 		if err := u.client.AddVpcDhcpOptionAssociation(current.VpcId, desired.DhcpOptionsId); err != nil {
 			return nil, err
 		}
-		new.DhcpOptionsId = desired.DhcpOptionsId
+		updated.DhcpOptionsId = desired.DhcpOptionsId
 	}
-	return new, nil
+
+	updatedTags, err := u.UpdateEC2Tags(ctx, current.VpcId, desired.Tags, current.Tags)
+	if err != nil {
+		return updated, err
+	}
+	updated.Tags = updatedTags
+	return updated, nil
 }
 
 func (u *updater) updateVpcAttributes(ctx context.Context, desired, current *VPC) (*VPC, error) {
-	new := *current
+	updated := *current
 	if desired.EnableDnsSupport != current.EnableDnsSupport {
 		if err := u.client.UpdateVpcAttribute(ctx, current.VpcId, ec2.VpcAttributeNameEnableDnsSupport, desired.EnableDnsSupport); err != nil {
 			return nil, err
 		}
-		new.EnableDnsSupport = desired.EnableDnsSupport
+		updated.EnableDnsSupport = desired.EnableDnsSupport
 	}
 	if desired.EnableDnsHostnames != current.EnableDnsHostnames {
 		if err := u.client.UpdateVpcAttribute(ctx, current.VpcId, ec2.VpcAttributeNameEnableDnsHostnames, desired.EnableDnsHostnames); err != nil {
 			return nil, err
 		}
-		new.EnableDnsHostnames = desired.EnableDnsHostnames
+		updated.EnableDnsHostnames = desired.EnableDnsHostnames
 	}
-	return &new, nil
+	return &updated, nil
 }
 
 func (u *updater) UpdateSecurityGroup(ctx context.Context, desired, current *SecurityGroup) (*SecurityGroup, error) {
@@ -83,14 +94,10 @@ func (u *updater) UpdateSecurityGroup(ctx context.Context, desired, current *Sec
 	if err := u.client.UpdateSecurityGroupRules(ctx, desired); err != nil {
 		return nil, err
 	}
-	list, err := u.client.DescribeSecurityGroups(ctx, &current.GroupId, nil)
-	if err != nil {
+	if _, err := u.UpdateEC2Tags(ctx, current.GroupId, desired.Tags, current.Tags); err != nil {
 		return nil, err
 	}
-	if len(list) != 1 {
-		return nil, fmt.Errorf("security group %s not found", current.GroupId)
-	}
-	return list[0], nil
+	return u.client.GetSecurityGroup(ctx, current.GroupId)
 }
 
 func (u *updater) UpdateRouteTable(ctx context.Context, desired, current *RouteTable) (*RouteTable, error) {
@@ -139,4 +146,64 @@ func (u *updater) UpdateIAMInstanceProfile(ctx context.Context, desired, current
 		}
 	}
 	return u.client.GetIAMInstanceProfile(ctx, current.InstanceProfileName)
+}
+
+func (u *updater) UpdateEC2Tags(ctx context.Context, id string, desired, current Tags) (Tags, error) {
+	toBeDeleted := Tags{}
+	toBeCreated := Tags{}
+	toBeIgnored := Tags{}
+	for k, v := range current {
+		if dv, ok := desired[k]; ok {
+			if dv != v {
+				toBeDeleted[k] = v
+				toBeCreated[k] = dv
+			}
+		} else if u.ignoreTag(k) {
+			toBeIgnored[k] = v
+		} else {
+			toBeDeleted[k] = v
+		}
+	}
+	for k, v := range desired {
+		if _, ok := current[k]; !ok && !u.ignoreTag(k) {
+			toBeCreated[k] = v
+		}
+	}
+
+	if len(toBeDeleted) > 0 {
+		if err := u.client.DeleteEC2Tags(ctx, []string{id}, toBeDeleted); err != nil {
+			return nil, err
+		}
+	}
+	if len(toBeCreated) > 0 {
+		if err := u.client.CreateEC2Tags(ctx, []string{id}, toBeCreated); err != nil {
+			return nil, err
+		}
+		updated := desired.Clone()
+		for k, v := range toBeCreated {
+			updated[k] = v
+		}
+		return updated, nil
+	} else {
+		return desired, nil
+	}
+
+	return desired.Clone(), nil
+}
+
+func (u *updater) ignoreTag(key string) bool {
+	if u.ignoreTags == nil {
+		return false
+	}
+	for _, ignoreKey := range u.ignoreTags.Keys {
+		if ignoreKey == key {
+			return true
+		}
+	}
+	for _, ignoreKeyPrefix := range u.ignoreTags.KeyPrefixes {
+		if strings.HasPrefix(key, ignoreKeyPrefix) {
+			return true
+		}
+	}
+	return false
 }
