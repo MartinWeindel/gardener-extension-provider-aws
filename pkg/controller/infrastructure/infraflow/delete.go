@@ -46,40 +46,49 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 		Fn: flow.TaskFn(rc.EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted).
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
 			DoIf(rc.state.HasID(IdentiferVPC) && !rc.state.IsTaskMarkedCompleted(TaskKeyLoadBalancersAndSecurityGroups))})
-	ensureDeleteGatewayEndpoints := g.Add(flow.Task{
+	ensureDeletedNodesSecurityGroup := g.Add(flow.Task{
+		Name: "ensure deletion of nodes security group",
+		Fn: flow.TaskFn(rc.EnsureDeletedNodesSecurityGroup).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	ensureDeletedMainRouteTable := g.Add(flow.Task{
+		Name: "ensure deletion of main route table",
+		Fn: flow.TaskFn(rc.EnsureDeletedMainRouteTable).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	ensureDeletedGatewayEndpoints := g.Add(flow.Task{
 		Name: "ensure deletion of gateway endpoints",
 		Fn: flow.TaskFn(rc.EnsureDeletedGatewayEndpoints).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
-	ensureDeleteInternetGateway := g.Add(flow.Task{
+	ensureDeletedInternetGateway := g.Add(flow.Task{
 		Name: "ensure deletion of internet gateway",
 		Fn: flow.TaskFn(rc.EnsureDeletedInternetGateway).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(ensureDeleteGatewayEndpoints),
+		Dependencies: flow.NewTaskIDs(ensureDeletedGatewayEndpoints, ensureDeletedMainRouteTable),
 	})
-	ensureDeleteDefaultSecurityGroup := g.Add(flow.Task{
+	ensureDeletedDefaultSecurityGroup := g.Add(flow.Task{
 		Name: "ensure deletion of default security group",
 		Fn: flow.TaskFn(rc.EnsureDeletedDefaultSecurityGroup).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(ensureDeleteGatewayEndpoints),
+		Dependencies: flow.NewTaskIDs(ensureDeletedGatewayEndpoints),
 	})
 	ensureDeletedVpc := g.Add(flow.Task{
 		Name: "ensure deletion of VPC",
 		Fn: flow.TaskFn(rc.EnsureDeletedVpc).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(ensureDeleteInternetGateway, ensureDeleteDefaultSecurityGroup, destroyLoadBalancersAndSecurityGroups),
+		Dependencies: flow.NewTaskIDs(ensureDeletedInternetGateway, ensureDeletedDefaultSecurityGroup, ensureDeletedNodesSecurityGroup, destroyLoadBalancersAndSecurityGroups),
 	})
-	ensureDeletedDhcpOptions := g.Add(flow.Task{
+	_ = g.Add(flow.Task{
 		Name: "ensure deletion of DHCP options for VPC",
 		Fn: flow.TaskFn(rc.EnsureDeletedDhcpOptions).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
 			DoIf(deleteVPC && !rc.state.IsIDAlreadyDeleted(IdentiferDHCPOptions)),
 		Dependencies: flow.NewTaskIDs(ensureDeletedVpc),
 	})
-	unused(ensureDeletedDhcpOptions)
 
 	return g
 }
@@ -194,6 +203,41 @@ func (rc *ReconcileContext) EnsureDeletedDhcpOptions(ctx context.Context) error 
 			return err
 		}
 		rc.logger.Info("Deleted VPC", "id", current.DhcpOptionsId)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedMainRouteTable(ctx context.Context) error {
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferMainRouteTable), rc.commonTags,
+		rc.client.GetRouteTable, rc.client.FindRouteTablesByTags)
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		if err := rc.client.DeleteRouteTable(ctx, current.RouteTableId); err != nil {
+			return err
+		}
+		rc.state.SetIDAsDeleted(IdentiferMainRouteTable)
+	} else {
+		rc.state.SetIDPtr(IdentiferMainRouteTable, nil)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedNodesSecurityGroup(ctx context.Context) error {
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferNodesSecurityGroup), rc.commonTags,
+		rc.client.GetSecurityGroup, rc.client.FindSecurityGroupsByTags,
+		func(item *awsclient.SecurityGroup) bool { return item.GroupName == "nodes" })
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		if err := rc.client.DeleteSecurityGroup(ctx, current.GroupId); err != nil {
+			return err
+		}
+		rc.state.SetIDAsDeleted(IdentiferNodesSecurityGroup)
+	} else {
+		rc.state.SetIDPtr(IdentiferNodesSecurityGroup, nil)
 	}
 	return nil
 }

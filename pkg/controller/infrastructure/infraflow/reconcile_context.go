@@ -40,6 +40,8 @@ const (
 	IdentiferDHCPOptions          = "DHCPOptions"
 	IdentiferDefaultSecurityGroup = "DefaultSecurityGroup"
 	IdentiferInternetGateway      = "InternetGateway"
+	IdentiferMainRouteTable       = "MainRouteTable"
+	IdentiferNodesSecurityGroup   = "NodesSecurityGroup"
 
 	ChildIdVPCEndpoints = "VPCEndpoints"
 )

@@ -102,7 +102,8 @@ outerCreate:
 
 func findExisting[T any](ctx context.Context, id *string, tags awsclient.Tags,
 	getter func(ctx context.Context, id string) (*T, error),
-	finder func(ctx context.Context, tags awsclient.Tags) ([]*T, error)) (*T, error) {
+	finder func(ctx context.Context, tags awsclient.Tags) ([]*T, error),
+	selector ...func(item *T) bool) (*T, error) {
 
 	if id != nil {
 		found, err := getter(ctx, *id)
@@ -117,6 +118,14 @@ func findExisting[T any](ctx context.Context, id *string, tags awsclient.Tags,
 		return nil, err
 	}
 	if len(found) == 0 {
+		return nil, nil
+	}
+	if selector != nil {
+		for _, item := range found {
+			if selector[0](item) {
+				return item, nil
+			}
+		}
 		return nil, nil
 	}
 	return found[0], nil

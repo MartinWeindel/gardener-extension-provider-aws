@@ -78,6 +78,20 @@ func (mr *MockInterfaceMockRecorder) AttachInternetGateway(arg0, arg1, arg2 inte
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AttachInternetGateway", reflect.TypeOf((*MockInterface)(nil).AttachInternetGateway), arg0, arg1, arg2)
 }
 
+// AuthorizeSecurityGroupRules mocks base method.
+func (m *MockInterface) AuthorizeSecurityGroupRules(arg0 context.Context, arg1 string, arg2 []*client.SecurityGroupRule) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AuthorizeSecurityGroupRules", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AuthorizeSecurityGroupRules indicates an expected call of AuthorizeSecurityGroupRules.
+func (mr *MockInterfaceMockRecorder) AuthorizeSecurityGroupRules(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AuthorizeSecurityGroupRules", reflect.TypeOf((*MockInterface)(nil).AuthorizeSecurityGroupRules), arg0, arg1, arg2)
+}
+
 // CreateBucketIfNotExists mocks base method.
 func (m *MockInterface) CreateBucketIfNotExists(arg0 context.Context, arg1, arg2 string) error {
 	m.ctrl.T.Helper()
@@ -653,36 +667,6 @@ func (mr *MockInterfaceMockRecorder) DescribeNATGateways(arg0, arg1, arg2 interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNATGateways", reflect.TypeOf((*MockInterface)(nil).DescribeNATGateways), arg0, arg1, arg2)
 }
 
-// DescribeRouteTables mocks base method.
-func (m *MockInterface) DescribeRouteTables(arg0 context.Context, arg1 *string, arg2 client.Tags) ([]*client.RouteTable, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeRouteTables", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]*client.RouteTable)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeRouteTables indicates an expected call of DescribeRouteTables.
-func (mr *MockInterfaceMockRecorder) DescribeRouteTables(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeRouteTables", reflect.TypeOf((*MockInterface)(nil).DescribeRouteTables), arg0, arg1, arg2)
-}
-
-// DescribeSubnets mocks base method.
-func (m *MockInterface) DescribeSubnets(arg0 context.Context, arg1 *string, arg2 client.Tags) ([]*client.Subnet, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeSubnets", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]*client.Subnet)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeSubnets indicates an expected call of DescribeSubnets.
-func (mr *MockInterfaceMockRecorder) DescribeSubnets(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSubnets", reflect.TypeOf((*MockInterface)(nil).DescribeSubnets), arg0, arg1, arg2)
-}
-
 // DetachInternetGateway mocks base method.
 func (m *MockInterface) DetachInternetGateway(arg0 context.Context, arg1, arg2 string) error {
 	m.ctrl.T.Helper()
@@ -727,6 +711,21 @@ func (mr *MockInterfaceMockRecorder) FindInternetGatewaysByTags(arg0, arg1 inter
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindInternetGatewaysByTags", reflect.TypeOf((*MockInterface)(nil).FindInternetGatewaysByTags), arg0, arg1)
 }
 
+// FindRouteTablesByTags mocks base method.
+func (m *MockInterface) FindRouteTablesByTags(arg0 context.Context, arg1 client.Tags) ([]*client.RouteTable, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindRouteTablesByTags", arg0, arg1)
+	ret0, _ := ret[0].([]*client.RouteTable)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindRouteTablesByTags indicates an expected call of FindRouteTablesByTags.
+func (mr *MockInterfaceMockRecorder) FindRouteTablesByTags(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindRouteTablesByTags", reflect.TypeOf((*MockInterface)(nil).FindRouteTablesByTags), arg0, arg1)
+}
+
 // FindSecurityGroupsByTags mocks base method.
 func (m *MockInterface) FindSecurityGroupsByTags(arg0 context.Context, arg1 client.Tags) ([]*client.SecurityGroup, error) {
 	m.ctrl.T.Helper()
@@ -740,6 +739,21 @@ func (m *MockInterface) FindSecurityGroupsByTags(arg0 context.Context, arg1 clie
 func (mr *MockInterfaceMockRecorder) FindSecurityGroupsByTags(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindSecurityGroupsByTags", reflect.TypeOf((*MockInterface)(nil).FindSecurityGroupsByTags), arg0, arg1)
+}
+
+// FindSubnetsByTags mocks base method.
+func (m *MockInterface) FindSubnetsByTags(arg0 context.Context, arg1 client.Tags) ([]*client.Subnet, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindSubnetsByTags", arg0, arg1)
+	ret0, _ := ret[0].([]*client.Subnet)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindSubnetsByTags indicates an expected call of FindSubnetsByTags.
+func (mr *MockInterfaceMockRecorder) FindSubnetsByTags(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindSubnetsByTags", reflect.TypeOf((*MockInterface)(nil).FindSubnetsByTags), arg0, arg1)
 }
 
 // FindVpcDhcpOptionsByTags mocks base method.
@@ -907,6 +921,21 @@ func (mr *MockInterfaceMockRecorder) GetNATGatewayAddressAllocations(arg0, arg1 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNATGatewayAddressAllocations", reflect.TypeOf((*MockInterface)(nil).GetNATGatewayAddressAllocations), arg0, arg1)
 }
 
+// GetRouteTable mocks base method.
+func (m *MockInterface) GetRouteTable(arg0 context.Context, arg1 string) (*client.RouteTable, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRouteTable", arg0, arg1)
+	ret0, _ := ret[0].(*client.RouteTable)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetRouteTable indicates an expected call of GetRouteTable.
+func (mr *MockInterfaceMockRecorder) GetRouteTable(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRouteTable", reflect.TypeOf((*MockInterface)(nil).GetRouteTable), arg0, arg1)
+}
+
 // GetSecurityGroup mocks base method.
 func (m *MockInterface) GetSecurityGroup(arg0 context.Context, arg1 string) (*client.SecurityGroup, error) {
 	m.ctrl.T.Helper()
@@ -920,6 +949,21 @@ func (m *MockInterface) GetSecurityGroup(arg0 context.Context, arg1 string) (*cl
 func (mr *MockInterfaceMockRecorder) GetSecurityGroup(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSecurityGroup", reflect.TypeOf((*MockInterface)(nil).GetSecurityGroup), arg0, arg1)
+}
+
+// GetSubnet mocks base method.
+func (m *MockInterface) GetSubnet(arg0 context.Context, arg1 string) (*client.Subnet, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSubnet", arg0, arg1)
+	ret0, _ := ret[0].(*client.Subnet)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSubnet indicates an expected call of GetSubnet.
+func (mr *MockInterfaceMockRecorder) GetSubnet(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubnet", reflect.TypeOf((*MockInterface)(nil).GetSubnet), arg0, arg1)
 }
 
 // GetVPCAttribute mocks base method.
@@ -1085,18 +1129,18 @@ func (mr *MockInterfaceMockRecorder) RemoveRoleFromIAMInstanceProfile(arg0, arg1
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveRoleFromIAMInstanceProfile", reflect.TypeOf((*MockInterface)(nil).RemoveRoleFromIAMInstanceProfile), arg0, arg1, arg2)
 }
 
-// UpdateSecurityGroupRules mocks base method.
-func (m *MockInterface) UpdateSecurityGroupRules(arg0 context.Context, arg1 *client.SecurityGroup) error {
+// RevokeSecurityGroupRules mocks base method.
+func (m *MockInterface) RevokeSecurityGroupRules(arg0 context.Context, arg1 string, arg2 []*client.SecurityGroupRule) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSecurityGroupRules", arg0, arg1)
+	ret := m.ctrl.Call(m, "RevokeSecurityGroupRules", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UpdateSecurityGroupRules indicates an expected call of UpdateSecurityGroupRules.
-func (mr *MockInterfaceMockRecorder) UpdateSecurityGroupRules(arg0, arg1 interface{}) *gomock.Call {
+// RevokeSecurityGroupRules indicates an expected call of RevokeSecurityGroupRules.
+func (mr *MockInterfaceMockRecorder) RevokeSecurityGroupRules(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSecurityGroupRules", reflect.TypeOf((*MockInterface)(nil).UpdateSecurityGroupRules), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevokeSecurityGroupRules", reflect.TypeOf((*MockInterface)(nil).RevokeSecurityGroupRules), arg0, arg1, arg2)
 }
 
 // UpdateVpcAttribute mocks base method.

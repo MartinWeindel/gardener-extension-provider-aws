@@ -88,10 +88,14 @@ func (u *updater) updateVpcAttributes(ctx context.Context, desired, current *VPC
 }
 
 func (u *updater) UpdateSecurityGroup(ctx context.Context, desired, current *SecurityGroup) (*SecurityGroup, error) {
-	if desired.EquivalentRulesTo(current) {
+	added, removed := desired.DiffRules(current)
+	if len(added) == 0 && len(removed) == 0 {
 		return current, nil
 	}
-	if err := u.client.UpdateSecurityGroupRules(ctx, desired); err != nil {
+	if err := u.client.RevokeSecurityGroupRules(ctx, current.GroupId, removed); err != nil {
+		return nil, err
+	}
+	if err := u.client.AuthorizeSecurityGroupRules(ctx, current.GroupId, added); err != nil {
 		return nil, err
 	}
 	if _, err := u.UpdateEC2Tags(ctx, current.GroupId, desired.Tags, current.Tags); err != nil {

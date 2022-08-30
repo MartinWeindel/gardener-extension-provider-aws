@@ -25,12 +25,13 @@ import (
 	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	"k8s.io/utils/pointer"
 )
 
 const (
 	FlowStateVersion1    = "1"
 	defaultRetryInterval = 5 * time.Second
-	defaultRetryTimeout  = 90 * time.Second
+	defaultRetryTimeout  = 2 * time.Minute
 )
 
 func (rc *ReconcileContext) Reconcile(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
@@ -77,8 +78,21 @@ func (rc *ReconcileContext) buildReconcileGraph() *flow.Graph {
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 		Dependencies: flow.NewTaskIDs(ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway),
 	})
-
+	ensureMainRouteTable := g.Add(flow.Task{
+		Name: "ensure main route table",
+		Fn: flow.TaskFn(rc.EnsureMainRouteTable).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway),
+	})
+	ensureNodesSecurityGroup := g.Add(flow.Task{
+		Name: "ensure nodes security group",
+		Fn: flow.TaskFn(rc.EnsureNodesSecurityGroup).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureVpc),
+	})
+	unused(ensureMainRouteTable)
 	unused(ensureGatewayEndpoints)
+	unused(ensureNodesSecurityGroup)
 
 	return g
 }
@@ -288,4 +302,98 @@ outer:
 		current = append(current, item)
 	}
 	return current, nil
+}
+
+func (rc *ReconcileContext) EnsureMainRouteTable(ctx context.Context) error {
+	desired := &awsclient.RouteTable{
+		Tags:  rc.commonTags,
+		VpcId: rc.state.GetID(IdentiferVPC),
+		Routes: []*awsclient.Route{
+			{
+				DestinationCidrBlock: "0.0.0.0/0",
+				GatewayId:            rc.state.GetID(IdentiferInternetGateway),
+			},
+		},
+	}
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferMainRouteTable), rc.commonTags,
+		rc.client.GetRouteTable, rc.client.FindRouteTablesByTags)
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		rc.state.SetID(IdentiferMainRouteTable, current.RouteTableId)
+		if _, err := rc.updater.UpdateEC2Tags(ctx, current.RouteTableId, rc.commonTags, current.Tags); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	created, err := rc.client.CreateRouteTable(ctx, desired)
+	if err != nil {
+		return err
+	}
+	rc.state.SetID(IdentiferMainRouteTable, created.RouteTableId)
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureNodesSecurityGroup(ctx context.Context) error {
+	desired := &awsclient.SecurityGroup{
+		Tags:        rc.commonTags,
+		GroupName:   "nodes",
+		VpcId:       rc.state.GetID(IdentiferVPC),
+		Description: pointer.String("Security group for nodes"),
+		Rules: []*awsclient.SecurityGroupRule{
+			{
+				Type:     awsclient.SecurityGroupRuleTypeIngress,
+				Protocol: "-1",
+				Self:     true,
+			},
+			{
+				Type:       awsclient.SecurityGroupRuleTypeIngress,
+				FromPort:   30000,
+				ToPort:     32767,
+				Protocol:   "tcp",
+				CidrBlocks: []string{"0.0.0.0/0"},
+			},
+			{
+				Type:       awsclient.SecurityGroupRuleTypeIngress,
+				FromPort:   30000,
+				ToPort:     32767,
+				Protocol:   "udp",
+				CidrBlocks: []string{"0.0.0.0/0"},
+			},
+			{
+				Type:       awsclient.SecurityGroupRuleTypeEgress,
+				Protocol:   "-1",
+				CidrBlocks: []string{"0.0.0.0/0"},
+			},
+		},
+	}
+	current, err := findExisting(ctx, rc.state.GetID(IdentiferNodesSecurityGroup), rc.commonTags,
+		rc.client.GetSecurityGroup, rc.client.FindSecurityGroupsByTags,
+		func(item *awsclient.SecurityGroup) bool { return item.GroupName == "nodes" })
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		rc.state.SetID(IdentiferNodesSecurityGroup, current.GroupId)
+		if _, err := rc.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	created, err := rc.client.CreateSecurityGroup(ctx, desired)
+	if err != nil {
+		return err
+	}
+	rc.state.SetID(IdentiferNodesSecurityGroup, created.GroupId)
+	current, err = rc.client.GetSecurityGroup(ctx, created.GroupId)
+	if err != nil {
+		return err
+	}
+	if _, err := rc.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
+		return err
+	}
+	return nil
 }

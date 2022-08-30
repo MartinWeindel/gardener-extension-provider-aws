@@ -74,7 +74,8 @@ type Interface interface {
 	GetSecurityGroup(ctx context.Context, id string) (*SecurityGroup, error)
 	FindSecurityGroupsByTags(ctx context.Context, tags Tags) ([]*SecurityGroup, error)
 	FindDefaultSecurityGroupByVpcId(ctx context.Context, vpcId string) (*SecurityGroup, error)
-	UpdateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error
+	AuthorizeSecurityGroupRules(ctx context.Context, id string, rules []*SecurityGroupRule) error
+	RevokeSecurityGroupRules(ctx context.Context, id string, rules []*SecurityGroupRule) error
 	DeleteSecurityGroup(ctx context.Context, id string) error
 
 	// Internet gateways
@@ -93,14 +94,16 @@ type Interface interface {
 
 	// Route tables
 	CreateRouteTable(ctx context.Context, routeTable *RouteTable) (*RouteTable, error)
-	DescribeRouteTables(ctx context.Context, id *string, tags Tags) ([]*RouteTable, error)
+	GetRouteTable(ctx context.Context, id string) (*RouteTable, error)
+	FindRouteTablesByTags(ctx context.Context, tags Tags) ([]*RouteTable, error)
 	DeleteRouteTable(ctx context.Context, id string) error
 	CreateRoute(ctx context.Context, routeTableId string, route *Route) error
 	DeleteRoute(ctx context.Context, routeTableId string, route *Route) error
 
 	// Subnets
 	CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, error)
-	DescribeSubnets(ctx context.Context, id *string, tags Tags) ([]*Subnet, error)
+	GetSubnet(ctx context.Context, id string) (*Subnet, error)
+	FindSubnetsByTags(ctx context.Context, tags Tags) ([]*Subnet, error)
 	DeleteSubnet(ctx context.Context, id string) error
 
 	// Route table associations
@@ -214,6 +217,43 @@ func (sg *SecurityGroup) EquivalentRulesTo(other *SecurityGroup) bool {
 	return true
 }
 
+func (sg *SecurityGroup) DiffRules(other *SecurityGroup) (addedRules, removedRules []*SecurityGroupRule) {
+	a := sg.SortedClone()
+	b := other.SortedClone()
+	an := len(a.Rules)
+	bn := len(b.Rules)
+	ai := 0
+	bi := 0
+	for ai < an || bi < bn {
+		var ra, rb *SecurityGroupRule
+		if ai < an {
+			ra = a.Rules[ai]
+		}
+		if bi < bn {
+			rb = b.Rules[bi]
+		}
+		if ra != nil {
+			if rb == nil || ra.LessThan(rb) {
+				addedRules = append(addedRules, ra)
+				ai++
+				continue
+			}
+		}
+		if rb != nil {
+			if ra == nil || rb.LessThan(ra) {
+				removedRules = append(removedRules, rb)
+				bi++
+				continue
+			}
+		}
+		if ra != nil && rb != nil {
+			ai++
+			bi++
+		}
+	}
+	return
+}
+
 type SecurityGroupRuleType string
 
 const (
@@ -227,6 +267,8 @@ type SecurityGroupRule struct {
 	ToPort     int
 	Protocol   string
 	CidrBlocks []string
+	Self       bool
+	Foreign    *string
 }
 
 func (sgr *SecurityGroupRule) Clone() *SecurityGroupRule {
@@ -248,6 +290,20 @@ func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
 	if sgr.Type > other.Type {
 		return false
 	}
+	if sgr.Foreign != nil || other.Foreign != nil {
+		if sgr.Foreign == nil {
+			return true
+		}
+		if other.Foreign == nil {
+			return false
+		}
+		if *sgr.Foreign < *other.Foreign {
+			return true
+		}
+		if *sgr.Foreign > *other.Foreign {
+			return false
+		}
+	}
 	if sgr.Protocol < other.Protocol {
 		return true
 	}
@@ -266,6 +322,9 @@ func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
 	if sgr.ToPort > other.ToPort {
 		return false
 	}
+	if sgr.Self != other.Self {
+		return other.Self
+	}
 	if len(sgr.CidrBlocks) < len(other.CidrBlocks) {
 		return true
 	}
@@ -280,7 +339,7 @@ func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
 			return false
 		}
 	}
-	return true
+	return false
 }
 
 type InternetGateway struct {

@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ import (
 	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -709,85 +711,101 @@ func (c *Client) CreateSecurityGroup(ctx context.Context, sg *SecurityGroup) (*S
 	created := *sg
 	created.Rules = nil
 	created.GroupId = *output.GroupId
-	if err = c.UpdateSecurityGroupRules(ctx, sg); err != nil {
-		return &created, err
-	}
-	for _, rule := range sg.Rules {
-		r := *rule
-		created.Rules = append(created.Rules, &r)
-	}
 	return &created, nil
 }
 
-func (c *Client) UpdateSecurityGroupRules(ctx context.Context, sg *SecurityGroup) error {
-	inputIngress := &ec2.UpdateSecurityGroupRuleDescriptionsIngressInput{
-		GroupId: aws.String(sg.GroupId),
+func (c *Client) AuthorizeSecurityGroupRules(ctx context.Context, groupId string, rules []*SecurityGroupRule) error {
+	ingressPermissions, egressPermissions, err := c.prepareRules(groupId, rules)
+	if err != nil {
+		return err
 	}
-	inputEgress := &ec2.UpdateSecurityGroupRuleDescriptionsEgressInput{
-		GroupId: aws.String(sg.GroupId),
-	}
-	for _, rule := range sg.Rules {
-		ipPerm := &ec2.IpPermission{
-			IpProtocol:       aws.String(rule.Protocol),
-			IpRanges:         nil,
-			PrefixListIds:    nil,
-			UserIdGroupPairs: nil,
+	if len(ingressPermissions) > 0 {
+		input := &ec2.AuthorizeSecurityGroupIngressInput{
+			GroupId:       aws.String(groupId),
+			IpPermissions: ingressPermissions,
 		}
-		if rule.FromPort != 0 {
-			ipPerm.FromPort = aws.Int64(int64(rule.FromPort))
-		}
-		if rule.ToPort != 0 {
-			ipPerm.ToPort = aws.Int64(int64(rule.ToPort))
-		}
-		for _, block := range rule.CidrBlocks {
-			ipPerm.IpRanges = append(ipPerm.IpRanges, &ec2.IpRange{CidrIp: aws.String(block)})
-		}
-		switch rule.Type {
-		case SecurityGroupRuleTypeIngress:
-			inputIngress.IpPermissions = append(inputIngress.IpPermissions, ipPerm)
-		case SecurityGroupRuleTypeEgress:
-			inputEgress.IpPermissions = append(inputEgress.IpPermissions, ipPerm)
-		default:
-			return fmt.Errorf("unknown security group rule type: %s", rule.Type)
-		}
-	}
-	var current *ec2.SecurityGroup
-	if len(inputIngress.IpPermissions) == 0 || len(inputEgress.IpPermissions) == 0 {
-		input := &ec2.DescribeSecurityGroupsInput{GroupIds: []*string{aws.String(sg.GroupId)}}
-		output, err := c.EC2.DescribeSecurityGroupsWithContext(ctx, input)
-		if err != nil {
-			return err
-		}
-		if len(output.SecurityGroups) == 0 {
-			return fmt.Errorf("security group %s not found", sg.GroupId)
-		}
-		current = output.SecurityGroups[0]
-	}
-	if len(inputIngress.IpPermissions) > 0 {
-		if _, err := c.EC2.UpdateSecurityGroupRuleDescriptionsIngressWithContext(ctx, inputIngress); err != nil {
-			return err
-		}
-	} else {
-		if _, err := c.EC2.RevokeSecurityGroupIngressWithContext(ctx, &ec2.RevokeSecurityGroupIngressInput{
-			GroupId:       aws.String(sg.GroupId),
-			IpPermissions: current.IpPermissions,
-		}); err != nil {
+		if _, err := c.EC2.AuthorizeSecurityGroupIngressWithContext(ctx, input); err != nil {
 			return err
 		}
 	}
-	if len(inputEgress.IpPermissions) > 0 {
-		if _, err := c.EC2.UpdateSecurityGroupRuleDescriptionsEgressWithContext(ctx, inputEgress); err != nil {
-			return err
+	if len(egressPermissions) > 0 {
+		input := &ec2.AuthorizeSecurityGroupEgressInput{
+			GroupId:       aws.String(groupId),
+			IpPermissions: egressPermissions,
 		}
-	} else {
-		if _, err := c.EC2.RevokeSecurityGroupEgressWithContext(ctx, &ec2.RevokeSecurityGroupEgressInput{
-			GroupId:       aws.String(sg.GroupId),
-			IpPermissions: current.IpPermissionsEgress,
-		}); err != nil {
+		if _, err := c.EC2.AuthorizeSecurityGroupEgressWithContext(ctx, input); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (c *Client) RevokeSecurityGroupRules(ctx context.Context, groupId string, rules []*SecurityGroupRule) error {
+	ingressPermissions, egressPermissions, err := c.prepareRules(groupId, rules)
+	if err != nil {
+		return err
+	}
+	if len(ingressPermissions) > 0 {
+		input := &ec2.RevokeSecurityGroupIngressInput{
+			GroupId:       aws.String(groupId),
+			IpPermissions: ingressPermissions,
+		}
+		if _, err := c.EC2.RevokeSecurityGroupIngressWithContext(ctx, input); err != nil {
+			return err
+		}
+	}
+	if len(egressPermissions) > 0 {
+		input := &ec2.RevokeSecurityGroupEgressInput{
+			GroupId:       aws.String(groupId),
+			IpPermissions: egressPermissions,
+		}
+		if _, err := c.EC2.RevokeSecurityGroupEgressWithContext(ctx, input); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) prepareRules(groupId string, rules []*SecurityGroupRule) (ingressPermissions, egressPermissions []*ec2.IpPermission, err error) {
+	for _, rule := range rules {
+		var ipPerm *ec2.IpPermission
+		if rule.Foreign != nil {
+			if err = json.Unmarshal([]byte(*rule.Foreign), ipPerm); err != nil {
+				return
+			}
+		} else {
+			ipPerm = &ec2.IpPermission{
+				IpProtocol:       aws.String(rule.Protocol),
+				IpRanges:         nil,
+				PrefixListIds:    nil,
+				UserIdGroupPairs: nil,
+			}
+			if rule.FromPort != 0 {
+				ipPerm.FromPort = aws.Int64(int64(rule.FromPort))
+			}
+			if rule.ToPort != 0 {
+				ipPerm.ToPort = aws.Int64(int64(rule.ToPort))
+			}
+			for _, block := range rule.CidrBlocks {
+				ipPerm.IpRanges = append(ipPerm.IpRanges, &ec2.IpRange{CidrIp: aws.String(block)})
+			}
+			if rule.Self {
+				ipPerm.UserIdGroupPairs = []*ec2.UserIdGroupPair{
+					{GroupId: aws.String(groupId)},
+				}
+			}
+		}
+		switch rule.Type {
+		case SecurityGroupRuleTypeIngress:
+			ingressPermissions = append(ingressPermissions, ipPerm)
+		case SecurityGroupRuleTypeEgress:
+			egressPermissions = append(egressPermissions, ipPerm)
+		default:
+			err = fmt.Errorf("unknown security group rule type: %s", rule.Type)
+			return
+		}
+	}
+	return
 }
 
 func (c *Client) GetSecurityGroup(ctx context.Context, id string) (*SecurityGroup, error) {
@@ -816,7 +834,17 @@ func (c *Client) describeSecurityGroups(ctx context.Context, input *ec2.Describe
 			Description: item.Description,
 		}
 		for _, ipPerm := range item.IpPermissions {
-			rule := fromIpPermission(ipPerm, SecurityGroupRuleTypeIngress)
+			rule, err := fromIpPermission(aws.StringValue(item.GroupId), ipPerm, SecurityGroupRuleTypeIngress)
+			if err != nil {
+				return nil, err
+			}
+			sg.Rules = append(sg.Rules, rule)
+		}
+		for _, ipPerm := range item.IpPermissionsEgress {
+			rule, err := fromIpPermission(aws.StringValue(item.GroupId), ipPerm, SecurityGroupRuleTypeEgress)
+			if err != nil {
+				return nil, err
+			}
 			sg.Rules = append(sg.Rules, rule)
 		}
 		sgList = append(sgList, sg)
@@ -1011,13 +1039,18 @@ func (c *Client) DeleteRoute(ctx context.Context, routeTableId string, route *Ro
 	return err
 }
 
-func (c *Client) DescribeRouteTables(ctx context.Context, id *string, tags Tags) ([]*RouteTable, error) {
-	input := &ec2.DescribeRouteTablesInput{}
-	if id != nil {
-		input.RouteTableIds = []*string{id}
-	} else {
-		input.Filters = tags.ToFilters()
-	}
+func (c *Client) GetRouteTable(ctx context.Context, id string) (*RouteTable, error) {
+	input := &ec2.DescribeRouteTablesInput{RouteTableIds: []*string{aws.String(id)}}
+	output, err := c.describeRouteTables(ctx, input)
+	return single(output, err)
+}
+
+func (c *Client) FindRouteTablesByTags(ctx context.Context, tags Tags) ([]*RouteTable, error) {
+	input := &ec2.DescribeRouteTablesInput{Filters: tags.ToFilters()}
+	return c.describeRouteTables(ctx, input)
+}
+
+func (c *Client) describeRouteTables(ctx context.Context, input *ec2.DescribeRouteTablesInput) ([]*RouteTable, error) {
 	output, err := c.EC2.DescribeRouteTablesWithContext(ctx, input)
 	if err != nil {
 		return nil, ignoreNotFound(err)
@@ -1056,13 +1089,18 @@ func (c *Client) CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, err
 	return fromSubnet(output.Subnet), nil
 }
 
-func (c *Client) DescribeSubnets(ctx context.Context, id *string, tags Tags) ([]*Subnet, error) {
-	input := &ec2.DescribeSubnetsInput{}
-	if id != nil {
-		input.SubnetIds = []*string{id}
-	} else {
-		input.Filters = tags.ToFilters()
-	}
+func (c *Client) GetSubnet(ctx context.Context, id string) (*Subnet, error) {
+	input := &ec2.DescribeSubnetsInput{SubnetIds: []*string{aws.String(id)}}
+	output, err := c.describeSubnets(ctx, input)
+	return single(output, err)
+}
+
+func (c *Client) FindSubnetsByTags(ctx context.Context, tags Tags) ([]*Subnet, error) {
+	input := &ec2.DescribeSubnetsInput{Filters: tags.ToFilters()}
+	return c.describeSubnets(ctx, input)
+}
+
+func (c *Client) describeSubnets(ctx context.Context, input *ec2.DescribeSubnetsInput) ([]*Subnet, error) {
 	output, err := c.EC2.DescribeSubnetsWithContext(ctx, input)
 	if err != nil {
 		return nil, ignoreNotFound(err)
@@ -1436,7 +1474,8 @@ func fromDhcpOptions(item *ec2.DhcpOptions) *DhcpOptions {
 	}
 }
 
-func fromIpPermission(ipPerm *ec2.IpPermission, ruleType SecurityGroupRuleType) *SecurityGroupRule {
+func fromIpPermission(groupId string, ipPerm *ec2.IpPermission, ruleType SecurityGroupRuleType) (*SecurityGroupRule, error) {
+	var foreign bool
 	var blocks []string
 	for _, block := range ipPerm.IpRanges {
 		blocks = append(blocks, *block.CidrIp)
@@ -1452,7 +1491,22 @@ func fromIpPermission(ipPerm *ec2.IpPermission, ruleType SecurityGroupRuleType) 
 	if ipPerm.ToPort != nil {
 		rule.ToPort = int(*ipPerm.ToPort)
 	}
-	return rule
+	if len(ipPerm.UserIdGroupPairs) == 1 && ipPerm.UserIdGroupPairs[0].GroupId != nil && *ipPerm.UserIdGroupPairs[0].GroupId == groupId {
+		rule.Self = true
+	} else if len(ipPerm.UserIdGroupPairs) != 0 {
+		foreign = true
+	}
+	if len(ipPerm.Ipv6Ranges) > 0 || len(ipPerm.PrefixListIds) > 0 {
+		foreign = true
+	}
+	if foreign {
+		data, err := json.Marshal(ipPerm)
+		if err != nil {
+			return nil, err
+		}
+		rule.Foreign = pointer.String(string(data))
+	}
+	return rule, nil
 }
 
 func fromSubnet(item *ec2.Subnet) *Subnet {
