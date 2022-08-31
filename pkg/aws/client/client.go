@@ -1080,7 +1080,7 @@ func (c *Client) CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, err
 		AvailabilityZone:  aws.String(subnet.AvailabilityZone),
 		CidrBlock:         aws.String(subnet.CidrBlock),
 		TagSpecifications: subnet.ToTagSpecifications(ec2.ResourceTypeSubnet),
-		VpcId:             aws.String(subnet.VpcId),
+		VpcId:             subnet.VpcId,
 	}
 	output, err := c.EC2.CreateSubnetWithContext(ctx, input)
 	if err != nil {
@@ -1089,10 +1089,9 @@ func (c *Client) CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, err
 	return fromSubnet(output.Subnet), nil
 }
 
-func (c *Client) GetSubnet(ctx context.Context, id string) (*Subnet, error) {
-	input := &ec2.DescribeSubnetsInput{SubnetIds: []*string{aws.String(id)}}
-	output, err := c.describeSubnets(ctx, input)
-	return single(output, err)
+func (c *Client) GetSubnets(ctx context.Context, ids []string) ([]*Subnet, error) {
+	input := &ec2.DescribeSubnetsInput{SubnetIds: aws.StringSlice(ids)}
+	return c.describeSubnets(ctx, input)
 }
 
 func (c *Client) FindSubnetsByTags(ctx context.Context, tags Tags) ([]*Subnet, error) {
@@ -1513,7 +1512,7 @@ func fromSubnet(item *ec2.Subnet) *Subnet {
 	return &Subnet{
 		Tags:             FromTags(item.Tags),
 		SubnetId:         aws.StringValue(item.SubnetId),
-		VpcId:            aws.StringValue(item.VpcId),
+		VpcId:            item.VpcId,
 		AvailabilityZone: aws.StringValue(item.AvailabilityZone),
 		CidrBlock:        aws.StringValue(item.CidrBlock),
 	}

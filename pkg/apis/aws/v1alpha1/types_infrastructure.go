@@ -184,23 +184,11 @@ type SecurityGroup struct {
 type FlowState struct {
 	// Version is state structure version
 	Version string `json:"version"`
-	// DhcpOptionsId is the created AWS DHCP option id if vpc was created
-	// +optional
-	DhcpOptionsId *string `json:"dhcpOptionsId,omitempty"`
-	// VpcId is the created AWS VPC id if vpc was created
-	// +optional
-	VpcId *string `json:"vpcId,omitempty"`
-	// DefaultSecurityGroupId is the id of the created default security group
-	// +optional
-	DefaultSecurityGroupId *string `json:"defaultSecurityGroupId,omitempty"`
-	// InternetGatewayId is the id of the created internet gateway
-	// +optional
-	InternetGatewayId *string `json:"internetGatewayId,omitempty"`
-	// VPCEndpointIds is the mapping VPC endpoint name to created id
-	// +optional
-	VPCEndpointIds map[string]string `json:"vpcEndpointIds,omitempty"`
 
-	// CompletedDeletionTasks records completed deletion tasks
+	// ResourceIdentifiers contains the identifiers for managed AWS resources
 	// +optional
-	CompletedDeletionTasks map[string]bool `json:"completedDeletionTasks,omitempty"`
+	ResourceIdentifiers map[string]string `json:"resourceIdentifiers,omitempty"`
+	// CompletedTaskMarkers contains info about completed one-time tasks
+	// +optional
+	CompletedTaskMarkers map[string]bool `json:"completedTaskMarkers,omitempty"`
 }

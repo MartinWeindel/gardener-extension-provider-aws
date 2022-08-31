@@ -49,16 +49,10 @@ func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastr
 	if err != nil {
 		return err
 	}
-	flowState, err := rctx.Delete(ctx)
-	if err != nil {
+	if err = rctx.Delete(ctx); err != nil {
 		return err
 	}
-
-	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, rctx.GetInfrastructureConfig())
-	if err != nil {
-		return err
-	}
-	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, nil)
+	return rctx.PersistFlowState(ctx)
 }
 
 // Delete deletes the given Infrastructure.

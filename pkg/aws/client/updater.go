@@ -31,6 +31,7 @@ type Updater interface {
 	UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error)
 	UpdateSecurityGroup(ctx context.Context, desired, current *SecurityGroup) (*SecurityGroup, error)
 	UpdateRouteTable(ctx context.Context, desired, current *RouteTable) (*RouteTable, error)
+	UpdateSubnet(ctx context.Context, desired, current *Subnet) (*Subnet, error)
 	UpdateIAMInstanceProfile(ctx context.Context, desired, current *IAMInstanceProfile) (*IAMInstanceProfile, error)
 	UpdateEC2Tags(ctx context.Context, id string, desired, current Tags) (Tags, error)
 }
@@ -133,6 +134,13 @@ outerCreate:
 		updated.Routes = append(updated.Routes, dr)
 	}
 	return &updated, nil
+}
+
+func (u *updater) UpdateSubnet(ctx context.Context, desired, current *Subnet) (*Subnet, error) {
+	if _, err := u.UpdateEC2Tags(ctx, current.SubnetId, desired.Tags, current.Tags); err != nil {
+		return current, err
+	}
+	return desired, nil
 }
 
 func (u *updater) UpdateIAMInstanceProfile(ctx context.Context, desired, current *IAMInstanceProfile) (*IAMInstanceProfile, error) {

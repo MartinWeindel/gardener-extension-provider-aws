@@ -22,9 +22,10 @@ import (
 	"fmt"
 	"time"
 
-	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/pointer"
 )
 
@@ -34,13 +35,13 @@ const (
 	defaultRetryTimeout  = 2 * time.Minute
 )
 
-func (rc *ReconcileContext) Reconcile(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
+func (rc *ReconcileContext) Reconcile(ctx context.Context) error {
 	g := rc.buildReconcileGraph()
 	f := g.Compile()
-	if err := f.Run(ctx, flow.Opts{}); err != nil {
-		return rc.UpdatedFlowState(), flow.Causes(err)
+	if err := f.Run(ctx, flow.Opts{Log: rc.logger}); err != nil {
+		return flow.Causes(err)
 	}
-	return rc.UpdatedFlowState(), nil
+	return nil
 }
 
 func (rc *ReconcileContext) buildReconcileGraph() *flow.Graph {
@@ -90,9 +91,14 @@ func (rc *ReconcileContext) buildReconcileGraph() *flow.Graph {
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 		Dependencies: flow.NewTaskIDs(ensureVpc),
 	})
-	unused(ensureMainRouteTable)
+	ensureSubnets := g.Add(flow.Task{
+		Name: "ensure subnets",
+		Fn: flow.TaskFn(rc.EnsureSubnets).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureVpc, ensureNodesSecurityGroup, ensureMainRouteTable),
+	})
+	unused(ensureSubnets)
 	unused(ensureGatewayEndpoints)
-	unused(ensureNodesSecurityGroup)
 
 	return g
 }
@@ -265,9 +271,9 @@ func (rc *ReconcileContext) EnsureGatewayEndpoints(ctx context.Context) error {
 			return err
 		}
 	}
-	for _, item := range toBeChecked {
-		commonTags := rc.commonTagsWithSuffix(fmt.Sprintf("gw-%s", rc.extractVpcEndpointName(item)))
-		if _, err := rc.updater.UpdateEC2Tags(ctx, item.VpcEndpointId, commonTags, item.Tags); err != nil {
+	for _, pair := range toBeChecked {
+		child.SetID(rc.extractVpcEndpointName(pair.current), pair.current.VpcEndpointId)
+		if _, err := rc.updater.UpdateEC2Tags(ctx, pair.current.VpcEndpointId, pair.desired.Tags, pair.current.Tags); err != nil {
 			return err
 		}
 	}
@@ -396,4 +402,153 @@ func (rc *ReconcileContext) EnsureNodesSecurityGroup(ctx context.Context) error 
 		return err
 	}
 	return nil
+}
+
+func (rc *ReconcileContext) EnsureSubnets(ctx context.Context) error {
+	child := rc.state.GetChild(ChildIdSubnets)
+	var desired []*awsclient.Subnet
+	for _, zone := range rc.config.Networks.Zones {
+		suffix := rc.subnetSuffix(child, zone.Name)
+		tags := rc.commonTagsWithSuffix(suffix)
+		tags[TagKeyRoleELB] = TagValueUse
+		desired = append(desired, &awsclient.Subnet{
+			Tags:             tags,
+			VpcId:            rc.state.GetID(IdentiferVPC),
+			CidrBlock:        zone.Public,
+			AvailabilityZone: zone.Name,
+		})
+	}
+	// update flow state if subnet suffixes have been added
+	if err := rc.PersistFlowState(ctx); err != nil {
+		return err
+	}
+	current, err := rc.collectExistingSubnets(ctx)
+	if err != nil {
+		return err
+	}
+	toBeDeleted, toBeCreated, toBeChecked := diffByID(desired, current, getSubnetChildKey)
+	g := flow.NewGraph("AWS infrastructure reconcilation: subnets")
+	for _, item := range toBeDeleted {
+		rc.addSubnetDeletionTasks(g, item)
+	}
+	for _, item := range toBeCreated {
+		rc.addSubnetReconcileTasks(g, item, nil)
+	}
+	for _, pair := range toBeChecked {
+		rc.addSubnetReconcileTasks(g, pair.desired, pair.current)
+	}
+	f := g.Compile()
+	if err := f.Run(ctx, flow.Opts{Log: rc.logger}); err != nil {
+		return flow.Causes(err)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) collectExistingSubnets(ctx context.Context) ([]*awsclient.Subnet, error) {
+	child := rc.state.GetChild(ChildIdSubnets)
+	var ids []string
+	for _, subnetChildKey := range child.GetChildrenKeys() {
+		subnetChild := child.GetChild(subnetChildKey)
+		if id := subnetChild.GetID(IdentifierSubnet); id != nil {
+			ids = append(ids, *id)
+		}
+	}
+	var current []*awsclient.Subnet
+	if len(ids) > 0 {
+		found, err := rc.client.GetSubnets(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		current = found
+	}
+	foundByTags, err := rc.client.FindSubnetsByTags(ctx, rc.clusterTags())
+	if err != nil {
+		return nil, err
+	}
+outer:
+	for _, item := range foundByTags {
+		for _, currentItem := range current {
+			if item.SubnetId == currentItem.SubnetId {
+				continue outer
+			}
+		}
+		current = append(current, item)
+	}
+	return current, nil
+}
+
+func (rc *ReconcileContext) subnetSuffix(subnetChild state.Whiteboard, zoneName string) string {
+	child := subnetChild.GetChild(zoneName)
+	if suffix := child.GetID(IdentifierSubnetSuffix); suffix != nil {
+		return *suffix
+	}
+	existing := sets.String{}
+	for _, key := range subnetChild.GetChildrenKeys() {
+		otherChild := subnetChild.GetChild(key)
+		if suffix := otherChild.GetID(IdentifierSubnetSuffix); suffix != nil {
+			existing.Insert(*suffix)
+		}
+	}
+	for i := 0; ; i++ {
+		suffix := fmt.Sprintf("z%d", i)
+		if !existing.Has(suffix) {
+			child.SetID(IdentifierSubnetSuffix, suffix)
+			return suffix
+		}
+	}
+}
+
+func (rc *ReconcileContext) addSubnetDeletionTasks(g *flow.Graph, item *awsclient.Subnet) {
+	g.Add(flow.Task{
+		Name: "ensure deletion of subnet resource",
+		Fn: flow.TaskFn(rc.EnsureDeletedSubnet(item)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+}
+
+func (rc *ReconcileContext) addSubnetReconcileTasks(g *flow.Graph, desired, current *awsclient.Subnet) {
+	g.Add(flow.Task{
+		Name: "ensure subnet resource",
+		Fn: flow.TaskFn(rc.EnsureSubnet(desired, current)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+}
+
+func (rc *ReconcileContext) EnsureDeletedSubnet(item *awsclient.Subnet) flow.TaskFn {
+	return func(ctx context.Context) error {
+		if err := rc.client.DeleteSubnet(ctx, item.SubnetId); err != nil {
+			return err
+		}
+		rc.getSubnetChild(item).SetIDAsDeleted(IdentifierSubnet)
+		return nil
+	}
+}
+
+func (rc *ReconcileContext) getSubnetChild(item *awsclient.Subnet) state.Whiteboard {
+	child := rc.state.GetChild(ChildIdSubnets)
+	return child.GetChild(getSubnetChildKey(item))
+}
+
+func (rc *ReconcileContext) EnsureSubnet(desired, current *awsclient.Subnet) flow.TaskFn {
+	if current == nil {
+		return func(ctx context.Context) error {
+			created, err := rc.client.CreateSubnet(ctx, desired)
+			if err != nil {
+				return err
+			}
+			rc.getSubnetChild(desired).SetID(IdentifierSubnet, created.SubnetId)
+			return nil
+		}
+	}
+	return func(ctx context.Context) error {
+		rc.getSubnetChild(desired).SetID(IdentifierSubnet, current.SubnetId)
+		if _, err := rc.updater.UpdateSubnet(ctx, desired, current); err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
+func getSubnetChildKey(item *awsclient.Subnet) string {
+	return item.AvailabilityZone
 }

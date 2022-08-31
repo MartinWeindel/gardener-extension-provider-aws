@@ -18,6 +18,7 @@
 package infraflow
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -30,11 +31,11 @@ import (
 )
 
 const (
-	TagKeyName                            = "Name"
-	TagKeyClusterTemplate                 = "kubernetes.io/cluster/%s"
-	TaskKeyLoadBalancersAndSecurityGroups = "LoadBalancersAndSecurityGroups"
-
-	TagValueCluster = "1"
+	TagKeyName            = "Name"
+	TagKeyClusterTemplate = "kubernetes.io/cluster/%s"
+	TagKeyRoleELB         = "kubernetes.io/role/elb"
+	TagValueCluster       = "1"
+	TagValueUse           = "use"
 
 	IdentiferVPC                  = "VPC"
 	IdentiferDHCPOptions          = "DHCPOptions"
@@ -42,8 +43,16 @@ const (
 	IdentiferInternetGateway      = "InternetGateway"
 	IdentiferMainRouteTable       = "MainRouteTable"
 	IdentiferNodesSecurityGroup   = "NodesSecurityGroup"
+	IdentifierSubnet              = "Subnet"
+	IdentifierSubnetSuffix        = "SubnetSuffix"
 
 	ChildIdVPCEndpoints = "VPCEndpoints"
+	ChildIdSubnets      = "Subnets"
+
+	MarkerMigratedFromTerraform                   = "MigratedFromTerraform"
+	MarkerLoadBalancersAndSecurityGroupsDestroyed = "LoadBalancersAndSecurityGroupsDestroyed"
+
+	Separator = "/"
 )
 
 type ReconcileContext struct {
@@ -54,19 +63,24 @@ type ReconcileContext struct {
 	updater    awsclient.Updater
 	commonTags awsclient.Tags
 
-	state state.Whiteboard
+	state                   state.Whiteboard
+	flowStatePersistor      FlowStatePersistor
+	lastPersistedGeneration int64
 }
+
+type FlowStatePersistor func(ctx context.Context, flowState *awsapiv1alpha.FlowState) error
 
 func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 	infra *extensionsv1alpha1.Infrastructure, config *awsapi.InfrastructureConfig,
-	oldFlowState *awsapi.FlowState) (*ReconcileContext, error) {
+	oldFlowState *awsapi.FlowState, persistor FlowStatePersistor) (*ReconcileContext, error) {
 	rc := &ReconcileContext{
-		infra:   infra,
-		config:  config,
-		logger:  logger,
-		client:  awsClient,
-		updater: awsclient.NewUpdater(awsClient, config.IgnoreTags),
-		state:   state.NewWhiteboard(),
+		infra:              infra,
+		config:             config,
+		logger:             logger,
+		client:             awsClient,
+		updater:            awsclient.NewUpdater(awsClient, config.IgnoreTags),
+		state:              state.NewWhiteboard(),
+		flowStatePersistor: persistor,
 	}
 	rc.commonTags = awsclient.Tags{
 		rc.tagKeyCluster(): TagValueCluster,
@@ -77,25 +91,10 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 		return nil, fmt.Errorf("unknown flow state version %s", oldFlowState.Version)
 	}
 
+	rc.fillStateFromFlowState(oldFlowState)
 	if config != nil && config.Networks.VPC.ID != nil {
 		rc.state.SetIDPtr(IdentiferVPC, config.Networks.VPC.ID)
-	} else if oldFlowState != nil {
-		rc.state.SetIDPtr(IdentiferVPC, oldFlowState.VpcId)
-		rc.state.SetIDPtr(IdentiferDHCPOptions, oldFlowState.DhcpOptionsId)
-		rc.state.SetIDPtr(IdentiferDefaultSecurityGroup, oldFlowState.DefaultSecurityGroupId)
-		rc.state.SetIDPtr(IdentiferInternetGateway, oldFlowState.InternetGatewayId)
-		if oldFlowState.VPCEndpointIds != nil {
-			child := rc.state.GetChild(ChildIdVPCEndpoints)
-			for k, v := range oldFlowState.VPCEndpointIds {
-				child.SetID(k, v)
-			}
-		}
 	}
-
-	if oldFlowState != nil && oldFlowState.CompletedDeletionTasks != nil {
-		rc.state.MarkTaskCompleted(TaskKeyLoadBalancersAndSecurityGroups, oldFlowState.CompletedDeletionTasks[TaskKeyLoadBalancersAndSecurityGroups])
-	}
-
 	return rc, nil
 }
 
@@ -121,27 +120,62 @@ func (rc *ReconcileContext) clusterTags() awsclient.Tags {
 
 func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
 	newFlowState := &awsapiv1alpha.FlowState{
-		Version:                FlowStateVersion1,
-		DhcpOptionsId:          rc.state.GetID(IdentiferDHCPOptions),
-		VpcId:                  rc.state.GetID(IdentiferVPC),
-		DefaultSecurityGroupId: rc.state.GetID(IdentiferDefaultSecurityGroup),
-		InternetGatewayId:      rc.state.GetID(IdentiferInternetGateway),
+		Version: FlowStateVersion1,
 	}
 
-	if rc.state.HasChild(ChildIdVPCEndpoints) {
-		child := rc.state.GetChild(ChildIdVPCEndpoints)
-		newFlowState.VPCEndpointIds = child.GetIDMap()
-	}
+	newFlowState.ResourceIdentifiers = rc.state.GetIDMap()
+	fillResourceIdentifiersFromState(newFlowState.ResourceIdentifiers, "", rc.state)
 
-	completedDeletionTasks := map[string]bool{}
-	if rc.state.IsTaskMarkedCompleted(TaskKeyLoadBalancersAndSecurityGroups) {
-		completedDeletionTasks[TaskKeyLoadBalancersAndSecurityGroups] = true
-	}
-	if len(completedDeletionTasks) > 0 {
-		newFlowState.CompletedDeletionTasks = completedDeletionTasks
+	markers := rc.state.GetCompletedTaskMarkers()
+	if len(markers) > 0 {
+		newFlowState.CompletedTaskMarkers = markers
 	}
 
 	return newFlowState
+}
+
+func (rc *ReconcileContext) PersistFlowState(ctx context.Context) error {
+	currentGeneration := rc.state.Generation()
+	if rc.lastPersistedGeneration == currentGeneration {
+		return nil
+	}
+	if rc.flowStatePersistor != nil {
+		newFlowState := rc.UpdatedFlowState()
+		if err := rc.flowStatePersistor(ctx, newFlowState); err != nil {
+			return err
+		}
+	}
+	rc.lastPersistedGeneration = currentGeneration
+	return nil
+}
+
+func fillResourceIdentifiersFromState(resourceIdentifiers map[string]string, parentPrefix string, whiteboard state.Whiteboard) {
+	for _, childKey := range whiteboard.GetChildrenKeys() {
+		child := whiteboard.GetChild(childKey)
+		childPrefix := parentPrefix + childKey + Separator
+		for k, v := range child.GetIDMap() {
+			key := childPrefix + k
+			resourceIdentifiers[key] = v
+		}
+		fillResourceIdentifiersFromState(resourceIdentifiers, childPrefix, child)
+	}
+}
+
+func (rc *ReconcileContext) fillStateFromFlowState(flowState *awsapi.FlowState) {
+	if flowState != nil {
+		for key, value := range flowState.ResourceIdentifiers {
+			parts := strings.Split(key, Separator)
+			w := rc.state
+			for i := 0; i < len(parts)-1; i++ {
+				w = w.GetChild(parts[i])
+			}
+			w.SetID(parts[len(parts)-1], value)
+		}
+
+		for k, v := range flowState.CompletedTaskMarkers {
+			rc.state.MarkTaskCompleted(k, v)
+		}
+	}
 }
 
 func (rc *ReconcileContext) vpcEndpointServiceNamePrefix() string {

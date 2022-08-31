@@ -20,6 +20,9 @@ package state
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
+
+	"k8s.io/utils/pointer"
 )
 
 const (
@@ -44,29 +47,39 @@ type Whiteboard interface {
 
 	IsTaskMarkedCompleted(key string) bool
 	MarkTaskCompleted(key string, completed bool)
-	GetMarkTaskCompletedKeys() []string
+	GetCompletedTaskMarkersKeys() []string
+	GetCompletedTaskMarkers() map[string]bool
+
+	// Generation returns modification generation
+	Generation() int64
 }
 
 type whiteboard struct {
 	sync.Mutex
 
-	children  map[string]*whiteboard
-	ids       map[string]string
-	completed map[string]bool
+	children   map[string]*whiteboard
+	ids        map[string]string
+	completed  map[string]bool
+	generation *atomic.Int64
 }
 
 var _ Whiteboard = &whiteboard{}
 
 func NewWhiteboard() Whiteboard {
-	return newWhiteboard()
+	return newWhiteboard(&atomic.Int64{})
 }
 
-func newWhiteboard() *whiteboard {
+func newWhiteboard(generation *atomic.Int64) *whiteboard {
 	return &whiteboard{
-		children:  map[string]*whiteboard{},
-		ids:       map[string]string{},
-		completed: map[string]bool{},
+		children:   map[string]*whiteboard{},
+		ids:        map[string]string{},
+		completed:  map[string]bool{},
+		generation: generation,
 	}
+}
+
+func (w *whiteboard) Generation() int64 {
+	return w.generation.Load()
 }
 
 func (w *whiteboard) IsEmpty() bool {
@@ -90,7 +103,7 @@ func (w *whiteboard) GetChild(key string) Whiteboard {
 
 	child := w.children[key]
 	if child == nil {
-		child = newWhiteboard()
+		child = newWhiteboard(w.generation)
 		w.children[key] = child
 	}
 	return child
@@ -131,11 +144,22 @@ func (w *whiteboard) GetIDMap() map[string]string {
 	return m
 }
 
-func (w *whiteboard) GetMarkTaskCompletedKeys() []string {
+func (w *whiteboard) GetCompletedTaskMarkersKeys() []string {
 	w.Lock()
 	defer w.Unlock()
 
 	return sortedKeys(w.completed)
+}
+
+func (w *whiteboard) GetCompletedTaskMarkers() map[string]bool {
+	w.Lock()
+	defer w.Unlock()
+
+	m := map[string]bool{}
+	for key, value := range w.completed {
+		m[key] = value
+	}
+	return m
 }
 
 func (w *whiteboard) GetID(key string) *string {
@@ -151,21 +175,23 @@ func (w *whiteboard) GetID(key string) *string {
 func (w *whiteboard) SetID(key, id string) {
 	w.Lock()
 	defer w.Unlock()
+	oldId := w.ids[key]
 	if id != "" {
 		w.ids[key] = id
 	} else {
 		delete(w.ids, key)
 	}
+	if oldId != id {
+		w.modified()
+	}
+}
+
+func (w *whiteboard) modified() {
+	w.generation.Add(1)
 }
 
 func (w *whiteboard) SetIDPtr(key string, id *string) {
-	w.Lock()
-	defer w.Unlock()
-	if id != nil {
-		w.ids[key] = *id
-	} else {
-		delete(w.ids, key)
-	}
+	w.SetID(key, pointer.StringDeref(id, ""))
 }
 
 func (w *whiteboard) HasID(key string) bool {
@@ -179,9 +205,7 @@ func (w *whiteboard) IsIDAlreadyDeleted(key string) bool {
 }
 
 func (w *whiteboard) SetIDAsDeleted(key string) {
-	w.Lock()
-	defer w.Unlock()
-	w.ids[key] = deleted
+	w.SetID(key, deleted)
 }
 
 func (w *whiteboard) IsTaskMarkedCompleted(key string) bool {
@@ -193,7 +217,11 @@ func (w *whiteboard) IsTaskMarkedCompleted(key string) bool {
 func (w *whiteboard) MarkTaskCompleted(key string, completed bool) {
 	w.Lock()
 	defer w.Unlock()
+	oldCompleted := w.completed[key]
 	w.completed[key] = completed
+	if oldCompleted != completed {
+		w.modified()
+	}
 }
 
 func sortedKeys[V any](m map[string]V) []string {

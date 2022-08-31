@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sort"
 
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -66,22 +65,16 @@ func PartialEqualExcluding[T any](a, b T, fields ...string) (equal bool, firstDi
 func unused(_ interface{}) {
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func diffByID[T any](desired, current []T, unique func(item T) string) (toBeDeleted, toBeCreated, toBeChecked []T) {
+func diffByID[T any](desired, current []T, unique func(item T) string) (toBeDeleted, toBeCreated []T, toBeChecked []struct{ desired, current T }) {
 outerDelete:
 	for _, c := range current {
 		cuniq := unique(c)
 		for _, d := range desired {
 			if cuniq == unique(d) {
-				toBeChecked = append(toBeChecked, c)
+				toBeChecked = append(toBeChecked, struct{ desired, current T }{
+					desired: d,
+					current: c,
+				})
 				continue outerDelete
 			}
 		}

@@ -504,74 +504,26 @@ string
 </tr>
 <tr>
 <td>
-<code>dhcpOptionsId</code></br>
-<em>
-string
-</em>
-</td>
-<td>
-<em>(Optional)</em>
-<p>DhcpOptionsId is the created AWS DHCP option id if vpc was created</p>
-</td>
-</tr>
-<tr>
-<td>
-<code>vpcId</code></br>
-<em>
-string
-</em>
-</td>
-<td>
-<em>(Optional)</em>
-<p>VpcId is the created AWS VPC id if vpc was created</p>
-</td>
-</tr>
-<tr>
-<td>
-<code>defaultSecurityGroupId</code></br>
-<em>
-string
-</em>
-</td>
-<td>
-<em>(Optional)</em>
-<p>DefaultSecurityGroupId is the id of the created default security group</p>
-</td>
-</tr>
-<tr>
-<td>
-<code>internetGatewayId</code></br>
-<em>
-string
-</em>
-</td>
-<td>
-<em>(Optional)</em>
-<p>InternetGatewayId is the id of the created internet gateway</p>
-</td>
-</tr>
-<tr>
-<td>
-<code>vpcEndpointIds</code></br>
+<code>resourceIdentifiers</code></br>
 <em>
 map[string]string
 </em>
 </td>
 <td>
 <em>(Optional)</em>
-<p>VPCEndpointIds is the mapping VPC endpoint name to created id</p>
+<p>ResourceIdentifiers contains the identifiers for managed AWS resources</p>
 </td>
 </tr>
 <tr>
 <td>
-<code>completedDeletionTasks</code></br>
+<code>completedTaskMarkers</code></br>
 <em>
 map[string]bool
 </em>
 </td>
 <td>
 <em>(Optional)</em>
-<p>CompletedDeletionTasks records completed deletion tasks</p>
+<p>CompletedTaskMarkers contains info about completed one-time tasks</p>
 </td>
 </tr>
 </tbody>

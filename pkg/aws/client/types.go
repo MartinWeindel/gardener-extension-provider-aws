@@ -102,7 +102,7 @@ type Interface interface {
 
 	// Subnets
 	CreateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, error)
-	GetSubnet(ctx context.Context, id string) (*Subnet, error)
+	GetSubnets(ctx context.Context, ids []string) ([]*Subnet, error)
 	FindSubnetsByTags(ctx context.Context, tags Tags) ([]*Subnet, error)
 	DeleteSubnet(ctx context.Context, id string) error
 
@@ -188,6 +188,7 @@ type SecurityGroup struct {
 func (sg *SecurityGroup) Clone() *SecurityGroup {
 	copy := *sg
 	copy.Rules = copyArray(sg.Rules)
+	copy.Tags = sg.Tags.Clone()
 	return &copy
 }
 
@@ -371,9 +372,15 @@ type Route struct {
 type Subnet struct {
 	Tags
 	SubnetId         string
-	VpcId            string
+	VpcId            *string
 	CidrBlock        string
 	AvailabilityZone string
+}
+
+func (s *Subnet) Clone() *Subnet {
+	copy := *s
+	copy.Tags = s.Tags.Clone()
+	return &copy
 }
 
 type ElasticIP struct {

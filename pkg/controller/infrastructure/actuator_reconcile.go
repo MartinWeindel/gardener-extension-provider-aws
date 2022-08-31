@@ -33,7 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -57,95 +56,52 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
 }
 
-func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure) (*infraflow.ReconcileContext, error) {
-
+func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger,
+	infrastructure *extensionsv1alpha1.Infrastructure) (*infraflow.ReconcileContext, error) {
+	var err error
 	infrastructureConfig := &awsapi.InfrastructureConfig{}
-	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
-		return nil, fmt.Errorf("could not decode provider config: %+v", err)
+	if _, _, err = a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
+		return nil, fmt.Errorf("could not decode provider config: %w", err)
 	}
 
 	awsClient, err := aws.NewClientFromSecretRef(ctx, a.Client(), infrastructure.Spec.SecretRef, infrastructure.Spec.Region)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create new AWS client: %+v", err)
+		return nil, fmt.Errorf("failed to create new AWS client: %w", err)
 	}
 
 	var oldFlowState *awsapi.FlowState
 	if infrastructure.Status.ProviderStatus != nil {
 		infraStatus := &awsapi.InfrastructureStatus{}
-		if _, _, err := a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
-			return nil, fmt.Errorf("could not decode provider status: %+v", err)
+		if _, _, err = a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
+			return nil, fmt.Errorf("could not decode provider status: %w", err)
 		}
 		oldFlowState = infraStatus.FlowState
 	}
 
+	migrated := false
 	if oldFlowState == nil {
-		oldFlowState, err = migrateTerraformStateToFlowState(infrastructure.Status.State)
+		oldFlowState, err = infraflow.MigrateTerraformStateToFlowState(infrastructure.Status.State)
 		if err != nil {
+			return nil, fmt.Errorf("migration from terraform state failed: %w", err)
+		}
+		migrated = true
+	}
+
+	persistor := func(ctx context.Context, flowState *awsv1alpha1.FlowState) error {
+		return a.updateProviderStatusFromFlowState(ctx, infrastructure, infrastructureConfig, flowState)
+	}
+	rctx, err := infraflow.NewReconcileContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, persistor)
+	if err != nil {
+		return nil, err
+	}
+	if migrated {
+
+		if err = rctx.PersistFlowState(ctx); err != nil {
 			return nil, err
 		}
 	}
 
-	return infraflow.NewReconcileContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState)
-}
-
-func migrateTerraformStateToFlowState(state *runtime.RawExtension) (*awsapi.FlowState, error) {
-	var (
-		tfRawState *terraformer.RawState
-		tfState    *infraflow.TerraformState
-		err        error
-	)
-
-	flowState := &awsapi.FlowState{
-		Version: infraflow.FlowStateVersion1,
-	}
-
-	if state == nil {
-		return flowState, nil
-	}
-
-	if tfRawState, err = getTerraformerRawState(state); err != nil {
-		return nil, err
-	}
-	data, err := tfRawState.Marshal()
-	if err != nil {
-		return nil, fmt.Errorf("could not marshal terraform raw state: %+v", err)
-	}
-	if tfState, err = infraflow.UnmarshalTerraformState(data); err != nil {
-		return nil, fmt.Errorf("could not decode terraform state: %+v", err)
-	}
-
-	if tfState.Outputs == nil {
-		return flowState, nil
-	}
-
-	value := tfState.Outputs[aws.VPCIDKey].Value
-	if value != "" {
-		flowState.VpcId = &value
-	}
-	flowState.DhcpOptionsId = tfState.GetManagedResourceInstanceID("aws_vpc_dhcp_options", "vpc_dhcp_options")
-	flowState.DefaultSecurityGroupId = tfState.GetManagedResourceInstanceID("aws_default_security_group", "default")
-	flowState.InternetGatewayId = tfState.GetManagedResourceInstanceID("aws_internet_gateway", "igw")
-
-	if instances := tfState.GetManagedResourceInstances("aws_vpc_endpoint"); len(instances) > 0 {
-		mappedInstances := map[string]string{}
-		for name, id := range instances {
-			mappedInstances[strings.TrimPrefix(name, "vpc_gwep_")] = id
-		}
-		flowState.VPCEndpointIds = mappedInstances
-	}
-
-	return flowState, nil
-}
-
-func getTerraformerRawState(state *runtime.RawExtension) (*terraformer.RawState, error) {
-	if state == nil {
-		return nil, nil
-	}
-	tfRawState, err := terraformer.UnmarshalRawState(state)
-	if err != nil {
-		return nil, fmt.Errorf("could not decode terraform raw state: %+v", err)
-	}
-	return tfRawState, nil
+	return rctx, nil
 }
 
 func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
@@ -155,24 +111,26 @@ func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infra
 	if err != nil {
 		return err
 	}
+	if err = rctx.Reconcile(ctx); err != nil {
+		return err
+	}
+	return rctx.PersistFlowState(ctx)
+}
 
-	flowState, err := rctx.Reconcile(ctx)
+func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure,
+	infrastructureConfig *awsapi.InfrastructureConfig, flowState *awsv1alpha1.FlowState) error {
+	tfRawState, err := infraflow.GetTerraformerRawState(infrastructure.Status.State)
 	if err != nil {
 		return err
 	}
-
-	infrastructureStatus, err := computeProviderStatusFromFlowState(ctx, flowState, rctx.GetInfrastructureConfig())
+	infrastructureStatus, err := computeProviderStatusFromFlowState(flowState, infrastructureConfig)
 	if err != nil {
-		return err
-	}
-	var tfRawState *terraformer.RawState
-	if tfRawState, err = getTerraformerRawState(infrastructure.Status.State); err != nil {
 		return err
 	}
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, tfRawState)
 }
 
-func computeProviderStatusFromFlowState(ctx context.Context, flowState *awsv1alpha1.FlowState, infrastructureConfig *awsapi.InfrastructureConfig) (*awsv1alpha1.InfrastructureStatus, error) {
+func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState, infrastructureConfig *awsapi.InfrastructureConfig) (*awsv1alpha1.InfrastructureStatus, error) {
 	/*
 		subnets, err := computeProviderStatusSubnets(infrastructureConfig, output)
 		if err != nil {
@@ -185,12 +143,12 @@ func computeProviderStatusFromFlowState(ctx context.Context, flowState *awsv1alp
 			Kind:       "InfrastructureStatus",
 		},
 		VPC: awsv1alpha1.VPCStatus{
-			ID:      pointer.StringDeref(flowState.VpcId, ""),
+			ID:      flowState.ResourceIdentifiers[infraflow.IdentiferVPC],
 			Subnets: nil, //subnets,
 			SecurityGroups: []awsv1alpha1.SecurityGroup{
 				{
 					Purpose: awsapi.PurposeNodes,
-					ID:      "???", //output[aws.SecurityGroupsNodes],
+					ID:      flowState.ResourceIdentifiers[infraflow.IdentiferNodesSecurityGroup],
 				},
 			},
 		},

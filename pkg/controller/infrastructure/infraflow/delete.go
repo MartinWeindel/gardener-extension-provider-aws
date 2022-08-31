@@ -22,19 +22,18 @@ import (
 	"fmt"
 	"time"
 
-	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	gardencorev1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	"github.com/gardener/gardener/pkg/utils/flow"
 )
 
-func (rc *ReconcileContext) Delete(ctx context.Context) (*awsapiv1alpha.FlowState, error) {
+func (rc *ReconcileContext) Delete(ctx context.Context) error {
 	g := rc.buildDeleteGraph()
 	f := g.Compile()
-	if err := f.Run(ctx, flow.Opts{}); err != nil {
-		return rc.UpdatedFlowState(), flow.Causes(err)
+	if err := f.Run(ctx, flow.Opts{Log: rc.logger}); err != nil {
+		return flow.Causes(err)
 	}
-	return rc.UpdatedFlowState(), nil
+	return nil
 }
 
 func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
@@ -45,16 +44,23 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 		Name: "Destroying Kubernetes load balancers and security groups",
 		Fn: flow.TaskFn(rc.EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted).
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
-			DoIf(rc.state.HasID(IdentiferVPC) && !rc.state.IsTaskMarkedCompleted(TaskKeyLoadBalancersAndSecurityGroups))})
+			DoIf(rc.state.HasID(IdentiferVPC) && !rc.state.IsTaskMarkedCompleted(MarkerLoadBalancersAndSecurityGroupsDestroyed))})
+	ensureDeletedSubnets := g.Add(flow.Task{
+		Name: "ensure deletion of subnets",
+		Fn: flow.TaskFn(rc.EnsureDeletedSubnets).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
 	ensureDeletedNodesSecurityGroup := g.Add(flow.Task{
 		Name: "ensure deletion of nodes security group",
 		Fn: flow.TaskFn(rc.EnsureDeletedNodesSecurityGroup).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureDeletedSubnets),
 	})
 	ensureDeletedMainRouteTable := g.Add(flow.Task{
 		Name: "ensure deletion of main route table",
 		Fn: flow.TaskFn(rc.EnsureDeletedMainRouteTable).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureDeletedSubnets),
 	})
 	ensureDeletedGatewayEndpoints := g.Add(flow.Task{
 		Name: "ensure deletion of gateway endpoints",
@@ -98,7 +104,7 @@ func (rc *ReconcileContext) EnsureKubernetesLoadBalancersAndSecurityGroupsDelete
 		return gardencorev1beta1helper.DeprecatedDetermineError(fmt.Errorf("Failed to destroy load balancers and security groups: %w", err))
 	}
 
-	rc.state.MarkTaskCompleted(TaskKeyLoadBalancersAndSecurityGroups, true)
+	rc.state.MarkTaskCompleted(MarkerLoadBalancersAndSecurityGroupsDestroyed, true)
 
 	return nil
 }
@@ -238,6 +244,22 @@ func (rc *ReconcileContext) EnsureDeletedNodesSecurityGroup(ctx context.Context)
 		rc.state.SetIDAsDeleted(IdentiferNodesSecurityGroup)
 	} else {
 		rc.state.SetIDPtr(IdentiferNodesSecurityGroup, nil)
+	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedSubnets(ctx context.Context) error {
+	current, err := rc.collectExistingSubnets(ctx)
+	if err != nil {
+		return err
+	}
+	g := flow.NewGraph("AWS infrastructure destruction: subnets")
+	for _, item := range current {
+		rc.addSubnetDeletionTasks(g, item)
+	}
+	f := g.Compile()
+	if err := f.Run(ctx, flow.Opts{Log: rc.logger}); err != nil {
+		return flow.Causes(err)
 	}
 	return nil
 }
