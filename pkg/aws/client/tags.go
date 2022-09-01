@@ -22,7 +22,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/aws/aws-sdk-go/service/iam"
 )
 
 type Tags map[string]string
@@ -30,14 +29,6 @@ type Tags map[string]string
 func FromTags(ec2Tags []*ec2.Tag) Tags {
 	tags := Tags{}
 	for _, et := range ec2Tags {
-		tags[aws.StringValue(et.Key)] = aws.StringValue(et.Value)
-	}
-	return tags
-}
-
-func FromIAMTags(iamTags []*iam.Tag) Tags {
-	tags := Tags{}
-	for _, et := range iamTags {
 		tags[aws.StringValue(et.Key)] = aws.StringValue(et.Value)
 	}
 	return tags
@@ -58,14 +49,6 @@ func (tags Tags) ToTagSpecifications(resourceType string) []*ec2.TagSpecificatio
 		return nil
 	}
 	return []*ec2.TagSpecification{tags.ToTagSpecification(resourceType)}
-}
-
-func (tags Tags) ToIAMTags() []*iam.Tag {
-	var copy []*iam.Tag
-	for k, v := range tags {
-		copy = append(copy, &iam.Tag{Key: aws.String(k), Value: aws.String(v)})
-	}
-	return copy
 }
 
 func (tags Tags) ToEC2Tags() []*ec2.Tag {

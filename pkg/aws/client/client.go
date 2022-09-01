@@ -1061,6 +1061,21 @@ func (c *Client) describeRouteTables(ctx context.Context, input *ec2.DescribeRou
 			RouteTableId: aws.StringValue(item.RouteTableId),
 			VpcId:        item.VpcId,
 		}
+		for _, route := range item.Routes {
+			table.Routes = append(table.Routes, &Route{
+				DestinationCidrBlock: aws.StringValue(route.DestinationCidrBlock),
+				GatewayId:            route.GatewayId,
+				NatGatewayId:         route.NatGatewayId,
+			})
+		}
+		for _, assoc := range item.Associations {
+			table.Associations = append(table.Associations, &RouteTableAssociation{
+				RouteTableAssociationId: aws.StringValue(assoc.RouteTableAssociationId),
+				Main:                    aws.BoolValue(assoc.Main),
+				GatewayId:               assoc.GatewayId,
+				SubnetId:                assoc.SubnetId,
+			})
+		}
 		tables = append(tables, table)
 	}
 	return tables, nil
@@ -1287,7 +1302,6 @@ func (c *Client) CreateIAMRole(ctx context.Context, role *IAMRole) (*IAMRole, er
 		AssumeRolePolicyDocument: aws.String(role.AssumeRolePolicyDocument),
 		Path:                     aws.String(role.Path),
 		RoleName:                 aws.String(role.RoleName),
-		Tags:                     role.ToIAMTags(),
 	}
 	output, err := c.IAM.CreateRoleWithContext(ctx, input)
 	if err != nil {
@@ -1319,7 +1333,6 @@ func (c *Client) CreateIAMInstanceProfile(ctx context.Context, profile *IAMInsta
 	input := &iam.CreateInstanceProfileInput{
 		InstanceProfileName: aws.String(profile.InstanceProfileName),
 		Path:                aws.String(profile.Path),
-		Tags:                profile.ToIAMTags(),
 	}
 	output, err := c.IAM.CreateInstanceProfileWithContext(ctx, input)
 	if err != nil {
@@ -1334,11 +1347,6 @@ func (c *Client) CreateIAMInstanceProfile(ctx context.Context, profile *IAMInsta
 		}
 	}); err != nil {
 		return nil, err
-	}
-	created := *profile
-	created.RoleName = ""
-	if err = c.AddRoleToIAMInstanceProfile(ctx, profileName, profile.RoleName); err != nil {
-		return &created, err
 	}
 	return c.GetIAMInstanceProfile(ctx, profileName)
 }
@@ -1400,7 +1408,7 @@ func (c *Client) GetIAMRolePolicy(ctx context.Context, policyName, roleName stri
 	}
 	output, err := c.IAM.GetRolePolicyWithContext(ctx, input)
 	if err != nil {
-		return nil, err
+		return nil, ignoreNotFound(err)
 	}
 	return &IAMRolePolicy{
 		PolicyName:     aws.StringValue(output.PolicyName),
@@ -1570,7 +1578,6 @@ func fromKeyPairInfo(item *ec2.KeyPairInfo) *KeyPairInfo {
 
 func fromIAMRole(item *iam.Role) *IAMRole {
 	return &IAMRole{
-		Tags:                     FromIAMTags(item.Tags),
 		RoleId:                   aws.StringValue(item.RoleId),
 		RoleName:                 aws.StringValue(item.RoleName),
 		Path:                     aws.StringValue(item.Path),
@@ -1585,7 +1592,6 @@ func fromIAMInstanceProfile(item *iam.InstanceProfile) *IAMInstanceProfile {
 		break
 	}
 	return &IAMInstanceProfile{
-		Tags:                FromIAMTags(item.Tags),
 		InstanceProfileId:   aws.StringValue(item.InstanceProfileId),
 		InstanceProfileName: aws.StringValue(item.InstanceProfileName),
 		Path:                aws.StringValue(item.Path),

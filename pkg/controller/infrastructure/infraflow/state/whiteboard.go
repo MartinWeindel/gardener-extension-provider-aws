@@ -47,6 +47,9 @@ type Whiteboard interface {
 	Keys() []string
 	AsMap() map[string]string
 
+	GetObject(key string) any
+	SetObject(key string, obj any)
+
 	ImportFromFlatMap(data map[string]string)
 	ExportAsFlatMap() map[string]string
 
@@ -59,7 +62,7 @@ type whiteboard struct {
 
 	children   map[string]*whiteboard
 	data       map[string]string
-	completed  map[string]bool
+	objects    map[string]any
 	generation *atomic.Int64
 }
 
@@ -73,7 +76,7 @@ func newWhiteboard(generation *atomic.Int64) *whiteboard {
 	return &whiteboard{
 		children:   map[string]*whiteboard{},
 		data:       map[string]string{},
-		completed:  map[string]bool{},
+		objects:    map[string]any{},
 		generation: generation,
 	}
 }
@@ -86,7 +89,7 @@ func (w *whiteboard) IsEmpty() bool {
 	w.Lock()
 	defer w.Unlock()
 
-	if len(w.data) != 0 || len(w.completed) != 0 {
+	if len(w.data) != 0 || len(w.objects) != 0 {
 		return false
 	}
 	for _, child := range w.children {
@@ -126,6 +129,18 @@ func (w *whiteboard) GetChildrenKeys() []string {
 	defer w.Unlock()
 
 	return sortedKeys(w.children)
+}
+
+func (w *whiteboard) GetObject(key string) any {
+	w.Lock()
+	defer w.Unlock()
+	return w.objects[key]
+}
+
+func (w *whiteboard) SetObject(key string, obj any) {
+	w.Lock()
+	defer w.Unlock()
+	w.objects[key] = obj
 }
 
 func (w *whiteboard) Keys() []string {

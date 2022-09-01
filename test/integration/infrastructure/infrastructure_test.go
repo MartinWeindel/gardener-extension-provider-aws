@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -105,7 +107,11 @@ var _ = BeforeSuite(func() {
 	repoRoot := filepath.Join("..", "..", "..")
 
 	// enable manager logs
-	logf.SetLogger(logger.MustNewZapLogger(logger.DebugLevel, logger.FormatJSON, zap.WriteTo(GinkgoWriter)))
+	var writer io.Writer = GinkgoWriter
+	if os.Getenv("VERBOSE") != "" {
+		writer = io.MultiWriter(GinkgoWriter, os.Stderr)
+	}
+	logf.SetLogger(logger.MustNewZapLogger(logger.DebugLevel, logger.FormatJSON, zap.WriteTo(writer)))
 
 	log = logf.Log.WithName("infrastructure-test")
 

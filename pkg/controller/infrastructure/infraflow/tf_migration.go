@@ -60,17 +60,17 @@ func MigrateTerraformStateToFlowState(state *runtime.RawExtension) (*awsapi.Flow
 
 	value := tfState.Outputs[aws.VPCIDKey].Value
 	if value != "" {
-		setFlowStateData(flowState, IdentiferVPC, &value)
+		setFlowStateData(flowState, IdentifierVPC, &value)
 	}
-	setFlowStateData(flowState, IdentiferDHCPOptions,
+	setFlowStateData(flowState, IdentifierDHCPOptions,
 		tfState.GetManagedResourceInstanceID("aws_vpc_dhcp_options", "vpc_dhcp_options"))
-	setFlowStateData(flowState, IdentiferDefaultSecurityGroup,
+	setFlowStateData(flowState, IdentifierDefaultSecurityGroup,
 		tfState.GetManagedResourceInstanceID("aws_default_security_group", "default"))
-	setFlowStateData(flowState, IdentiferInternetGateway,
+	setFlowStateData(flowState, IdentifierInternetGateway,
 		tfState.GetManagedResourceInstanceID("aws_internet_gateway", "igw"))
-	setFlowStateData(flowState, IdentiferMainRouteTable,
+	setFlowStateData(flowState, IdentifierMainRouteTable,
 		tfState.GetManagedResourceInstanceID("aws_route", "public"))
-	setFlowStateData(flowState, IdentiferNodesSecurityGroup,
+	setFlowStateData(flowState, IdentifierNodesSecurityGroup,
 		tfState.GetManagedResourceInstanceID("aws_security_group", "nodes"))
 
 	if instances := tfState.GetManagedResourceInstances("aws_vpc_endpoint"); len(instances) > 0 {

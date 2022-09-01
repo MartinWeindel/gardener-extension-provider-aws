@@ -38,21 +38,32 @@ const (
 	TagValueCluster       = "1"
 	TagValueUse           = "use"
 
-	IdentiferVPC                  = "VPC"
-	IdentiferDHCPOptions          = "DHCPOptions"
-	IdentiferDefaultSecurityGroup = "DefaultSecurityGroup"
-	IdentiferInternetGateway      = "InternetGateway"
-	IdentiferMainRouteTable       = "MainRouteTable"
-	IdentiferNodesSecurityGroup   = "NodesSecurityGroup"
-	IdentifierZoneSubnetWorkers   = "SubnetWorkers"
-	IdentifierZoneSubnetPublic    = "SubnetPublicUtility"
-	IdentifierZoneSubnetPrivate   = "SubnetPrivateUtility"
-	IdentifierZoneSuffix          = "Suffix"
-	IdentifierZoneNATGWElasticIP  = "NATGatewayElasticIP"
-	IdentifierZoneNATGateway      = "NATGateway"
+	IdentifierVPC                              = "VPC"
+	IdentifierDHCPOptions                      = "DHCPOptions"
+	IdentifierDefaultSecurityGroup             = "DefaultSecurityGroup"
+	IdentifierInternetGateway                  = "InternetGateway"
+	IdentifierMainRouteTable                   = "MainRouteTable"
+	IdentifierNodesSecurityGroup               = "NodesSecurityGroup"
+	IdentifierZoneSubnetWorkers                = "SubnetWorkers"
+	IdentifierZoneSubnetPublic                 = "SubnetPublicUtility"
+	IdentifierZoneSubnetPrivate                = "SubnetPrivateUtility"
+	IdentifierZoneSuffix                       = "Suffix"
+	IdentifierZoneNATGWElasticIP               = "NATGatewayElasticIP"
+	IdentifierZoneNATGateway                   = "NATGateway"
+	IdentifierZoneRouteTable                   = "ZoneRouteTable"
+	IdentifierZoneSubnetPublicRouteTableAssoc  = "SubnetPublicRouteTableAssoc"
+	IdentifierZoneSubnetPrivateRouteTableAssoc = "SubnetPrivateRouteTableAssoc"
+	IdentifierZoneSubnetWorkersRouteTableAssoc = "SubnetWorkersRouteTableAssoc"
+	IdentifierIAMRole                          = "IAMRole"
+	IdentifierIAMInstanceProfile               = "IAMInstanceProfile"
+	IdentifierIAMRolePolicy                    = "IAMRolePolicy"
+	IdentifierKeyPair                          = "KeyPair"
 
 	ChildIdVPCEndpoints = "VPCEndpoints"
 	ChildIdZones        = "Zones"
+
+	ObjectMainRouteTable = "MainRouteTable"
+	ObjectZoneRouteTable = "ZoneRouteTable"
 
 	MarkerMigratedFromTerraform                   = "MigratedFromTerraform"
 	MarkerLoadBalancersAndSecurityGroupsDestroyed = "LoadBalancersAndSecurityGroupsDestroyed"
@@ -96,7 +107,7 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 
 	rc.fillStateFromFlowState(oldFlowState)
 	if config != nil && config.Networks.VPC.ID != nil {
-		rc.state.SetPtr(IdentiferVPC, config.Networks.VPC.ID)
+		rc.state.SetPtr(IdentifierVPC, config.Networks.VPC.ID)
 	}
 	return rc, nil
 }

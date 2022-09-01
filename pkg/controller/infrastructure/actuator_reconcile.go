@@ -143,12 +143,12 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState, infras
 			Kind:       "InfrastructureStatus",
 		},
 		VPC: awsv1alpha1.VPCStatus{
-			ID:      flowState.Data[infraflow.IdentiferVPC],
+			ID:      flowState.Data[infraflow.IdentifierVPC],
 			Subnets: nil, //subnets,
 			SecurityGroups: []awsv1alpha1.SecurityGroup{
 				{
 					Purpose: awsapi.PurposeNodes,
-					ID:      flowState.Data[infraflow.IdentiferNodesSecurityGroup],
+					ID:      flowState.Data[infraflow.IdentifierNodesSecurityGroup],
 				},
 			},
 		},

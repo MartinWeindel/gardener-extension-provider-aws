@@ -364,12 +364,20 @@ type RouteTable struct {
 	RouteTableId string
 	VpcId        *string
 	Routes       []*Route
+	Associations []*RouteTableAssociation
 }
 
 type Route struct {
 	DestinationCidrBlock string
 	GatewayId            *string
 	NatGatewayId         *string
+}
+
+type RouteTableAssociation struct {
+	RouteTableAssociationId string
+	Main                    bool
+	GatewayId               *string
+	SubnetId                *string
 }
 
 type Subnet struct {
@@ -408,7 +416,6 @@ type KeyPairInfo struct {
 }
 
 type IAMRole struct {
-	Tags
 	RoleId                   string
 	RoleName                 string
 	Path                     string
@@ -416,7 +423,6 @@ type IAMRole struct {
 }
 
 type IAMInstanceProfile struct {
-	Tags
 	InstanceProfileId   string
 	InstanceProfileName string
 	Path                string

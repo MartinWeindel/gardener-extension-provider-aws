@@ -39,15 +39,36 @@ func (rc *ReconcileContext) Delete(ctx context.Context) error {
 func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 	g := flow.NewGraph("AWS infrastructure destruction")
 
-	deleteVPC := rc.config.Networks.VPC.ID == nil && rc.state.Has(IdentiferVPC)
+	deleteVPC := rc.config.Networks.VPC.ID == nil && rc.state.Has(IdentifierVPC)
 	destroyLoadBalancersAndSecurityGroups := g.Add(flow.Task{
 		Name: "Destroying Kubernetes load balancers and security groups",
 		Fn: flow.TaskFn(rc.EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted).
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
-			DoIf(rc.state.Has(IdentiferVPC) && rc.state.Get(MarkerLoadBalancersAndSecurityGroupsDestroyed) == nil)})
+			DoIf(rc.state.Has(IdentifierVPC) && rc.state.Get(MarkerLoadBalancersAndSecurityGroupsDestroyed) == nil)})
+	_ = g.Add(flow.Task{
+		Name: "ensure key pair",
+		Fn: flow.TaskFn(rc.EnsureDeletedKeyPair).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	ensureDeletedIAMInstanceProfile := g.Add(flow.Task{
+		Name: "ensure deletion of IAM instance profile",
+		Fn: flow.TaskFn(rc.EnsureDeletedIAMInstanceProfile).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	ensureDeletedIAMRolePolicy := g.Add(flow.Task{
+		Name: "ensure deletion of IAM role policy",
+		Fn: flow.TaskFn(rc.EnsureDeletedIAMRolePolicy).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	_ = g.Add(flow.Task{
+		Name: "ensure IAM role",
+		Fn: flow.TaskFn(rc.EnsureDeletedIAMRole).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(ensureDeletedIAMInstanceProfile, ensureDeletedIAMRolePolicy),
+	})
 	ensureDeletedSubnets := g.Add(flow.Task{
-		Name: "ensure deletion of subnets",
-		Fn: flow.TaskFn(rc.EnsureDeletedSubnets).
+		Name: "ensure deletion of zones resources",
+		Fn: flow.TaskFn(rc.EnsureDeletedZones).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
 	ensureDeletedNodesSecurityGroup := g.Add(flow.Task{
@@ -92,7 +113,7 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 		Name: "ensure deletion of DHCP options for VPC",
 		Fn: flow.TaskFn(rc.EnsureDeletedDhcpOptions).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
-			DoIf(deleteVPC && !rc.state.IsAlreadyDeleted(IdentiferDHCPOptions)),
+			DoIf(deleteVPC && !rc.state.IsAlreadyDeleted(IdentifierDHCPOptions)),
 		Dependencies: flow.NewTaskIDs(ensureDeletedVpc),
 	})
 
@@ -100,7 +121,7 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 }
 
 func (rc *ReconcileContext) EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted(ctx context.Context) error {
-	if err := DestroyKubernetesLoadBalancersAndSecurityGroups(ctx, rc.client, *rc.state.Get(IdentiferVPC), rc.infra.Namespace); err != nil {
+	if err := DestroyKubernetesLoadBalancersAndSecurityGroups(ctx, rc.client, *rc.state.Get(IdentifierVPC), rc.infra.Namespace); err != nil {
 		return gardencorev1beta1helper.DeprecatedDetermineError(fmt.Errorf("Failed to destroy load balancers and security groups: %w", err))
 	}
 
@@ -135,24 +156,24 @@ func DestroyKubernetesLoadBalancersAndSecurityGroups(ctx context.Context, awsCli
 
 func (rc *ReconcileContext) EnsureDeletedDefaultSecurityGroup(ctx context.Context) error {
 	// nothing to do, it is deleted automatically together with VPC
-	rc.state.SetAsDeleted(IdentiferDefaultSecurityGroup)
+	rc.state.SetAsDeleted(IdentifierDefaultSecurityGroup)
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureDeletedInternetGateway(ctx context.Context) error {
-	current, err := findExisting(ctx, rc.state.Get(IdentiferInternetGateway), rc.commonTags,
+	current, err := findExisting(ctx, rc.state.Get(IdentifierInternetGateway), rc.commonTags,
 		rc.client.GetInternetGateway, rc.client.FindInternetGatewaysByTags)
 	if err != nil {
 		return err
 	}
 	if current != nil {
-		if err := rc.client.DetachInternetGateway(ctx, *rc.state.Get(IdentiferVPC), current.InternetGatewayId); err != nil {
+		if err := rc.client.DetachInternetGateway(ctx, *rc.state.Get(IdentifierVPC), current.InternetGatewayId); err != nil {
 			return err
 		}
 		if err := rc.client.DeleteInternetGateway(ctx, current.InternetGatewayId); err != nil {
 			return err
 		}
-		rc.state.SetAsDeleted(IdentiferInternetGateway)
+		rc.state.SetAsDeleted(IdentifierInternetGateway)
 		rc.logger.Info("Deleted internet gateway", "id", current.InternetGatewayId)
 	}
 	return nil
@@ -181,7 +202,7 @@ func (rc *ReconcileContext) EnsureDeletedGatewayEndpoints(ctx context.Context) e
 }
 
 func (rc *ReconcileContext) EnsureDeletedVpc(ctx context.Context) error {
-	current, err := findExisting(ctx, rc.state.Get(IdentiferVPC), rc.commonTags,
+	current, err := findExisting(ctx, rc.state.Get(IdentifierVPC), rc.commonTags,
 		rc.client.GetVpc, rc.client.FindVpcsByTags)
 	if err != nil {
 		return err
@@ -193,12 +214,12 @@ func (rc *ReconcileContext) EnsureDeletedVpc(ctx context.Context) error {
 		}
 		rc.logger.Info("Deleted VPC", "id", current.VpcId)
 	}
-	rc.state.SetAsDeleted(IdentiferVPC)
+	rc.state.SetAsDeleted(IdentifierVPC)
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureDeletedDhcpOptions(ctx context.Context) error {
-	current, err := findExisting(ctx, rc.state.Get(IdentiferDHCPOptions), rc.commonTags,
+	current, err := findExisting(ctx, rc.state.Get(IdentifierDHCPOptions), rc.commonTags,
 		rc.client.GetVpcDhcpOptions, rc.client.FindVpcDhcpOptionsByTags)
 	if err != nil {
 		return err
@@ -214,7 +235,7 @@ func (rc *ReconcileContext) EnsureDeletedDhcpOptions(ctx context.Context) error 
 }
 
 func (rc *ReconcileContext) EnsureDeletedMainRouteTable(ctx context.Context) error {
-	current, err := findExisting(ctx, rc.state.Get(IdentiferMainRouteTable), rc.commonTags,
+	current, err := findExisting(ctx, rc.state.Get(IdentifierMainRouteTable), rc.commonTags,
 		rc.client.GetRouteTable, rc.client.FindRouteTablesByTags)
 	if err != nil {
 		return err
@@ -223,16 +244,16 @@ func (rc *ReconcileContext) EnsureDeletedMainRouteTable(ctx context.Context) err
 		if err := rc.client.DeleteRouteTable(ctx, current.RouteTableId); err != nil {
 			return err
 		}
-		rc.state.SetAsDeleted(IdentiferMainRouteTable)
+		rc.state.SetAsDeleted(IdentifierMainRouteTable)
 	} else {
-		rc.state.SetPtr(IdentiferMainRouteTable, nil)
+		rc.state.SetPtr(IdentifierMainRouteTable, nil)
 	}
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureDeletedNodesSecurityGroup(ctx context.Context) error {
 	groupName := fmt.Sprintf("%s-nodes", rc.infra.Namespace)
-	current, err := findExisting(ctx, rc.state.Get(IdentiferNodesSecurityGroup), rc.commonTagsWithSuffix("nodes"),
+	current, err := findExisting(ctx, rc.state.Get(IdentifierNodesSecurityGroup), rc.commonTagsWithSuffix("nodes"),
 		rc.client.GetSecurityGroup, rc.client.FindSecurityGroupsByTags,
 		func(item *awsclient.SecurityGroup) bool { return item.GroupName == groupName })
 	if err != nil {
@@ -242,14 +263,14 @@ func (rc *ReconcileContext) EnsureDeletedNodesSecurityGroup(ctx context.Context)
 		if err := rc.client.DeleteSecurityGroup(ctx, current.GroupId); err != nil {
 			return err
 		}
-		rc.state.SetAsDeleted(IdentiferNodesSecurityGroup)
+		rc.state.SetAsDeleted(IdentifierNodesSecurityGroup)
 	} else {
-		rc.state.SetPtr(IdentiferNodesSecurityGroup, nil)
+		rc.state.SetPtr(IdentifierNodesSecurityGroup, nil)
 	}
 	return nil
 }
 
-func (rc *ReconcileContext) EnsureDeletedSubnets(ctx context.Context) error {
+func (rc *ReconcileContext) EnsureDeletedZones(ctx context.Context) error {
 	current, err := rc.collectExistingSubnets(ctx)
 	if err != nil {
 		return err
