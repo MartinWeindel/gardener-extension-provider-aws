@@ -19,6 +19,7 @@ package state
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -26,7 +27,8 @@ import (
 )
 
 const (
-	deleted = "<deleted>"
+	deleted   = "<deleted>"
+	separator = "/"
 )
 
 type Whiteboard interface {
@@ -36,19 +38,17 @@ type Whiteboard interface {
 	HasChild(key string) bool
 	GetChildrenKeys() []string
 
-	GetID(key string) *string
-	HasID(key string) bool
-	SetID(key, id string)
-	SetIDPtr(key string, id *string)
-	IsIDAlreadyDeleted(key string) bool
-	SetIDAsDeleted(key string)
-	GetIDKeys() []string
-	GetIDMap() map[string]string
+	Get(key string) *string
+	Has(key string) bool
+	Set(key, id string)
+	SetPtr(key string, id *string)
+	IsAlreadyDeleted(key string) bool
+	SetAsDeleted(key string)
+	Keys() []string
+	AsMap() map[string]string
 
-	IsTaskMarkedCompleted(key string) bool
-	MarkTaskCompleted(key string, completed bool)
-	GetCompletedTaskMarkersKeys() []string
-	GetCompletedTaskMarkers() map[string]bool
+	ImportFromFlatMap(data map[string]string)
+	ExportAsFlatMap() map[string]string
 
 	// Generation returns modification generation
 	Generation() int64
@@ -58,7 +58,7 @@ type whiteboard struct {
 	sync.Mutex
 
 	children   map[string]*whiteboard
-	ids        map[string]string
+	data       map[string]string
 	completed  map[string]bool
 	generation *atomic.Int64
 }
@@ -72,7 +72,7 @@ func NewWhiteboard() Whiteboard {
 func newWhiteboard(generation *atomic.Int64) *whiteboard {
 	return &whiteboard{
 		children:   map[string]*whiteboard{},
-		ids:        map[string]string{},
+		data:       map[string]string{},
 		completed:  map[string]bool{},
 		generation: generation,
 	}
@@ -86,7 +86,7 @@ func (w *whiteboard) IsEmpty() bool {
 	w.Lock()
 	defer w.Unlock()
 
-	if len(w.ids) != 0 || len(w.completed) != 0 {
+	if len(w.data) != 0 || len(w.completed) != 0 {
 		return false
 	}
 	for _, child := range w.children {
@@ -98,6 +98,10 @@ func (w *whiteboard) IsEmpty() bool {
 }
 
 func (w *whiteboard) GetChild(key string) Whiteboard {
+	return w.getChild(key)
+}
+
+func (w *whiteboard) getChild(key string) *whiteboard {
 	w.Lock()
 	defer w.Unlock()
 
@@ -124,19 +128,19 @@ func (w *whiteboard) GetChildrenKeys() []string {
 	return sortedKeys(w.children)
 }
 
-func (w *whiteboard) GetIDKeys() []string {
+func (w *whiteboard) Keys() []string {
 	w.Lock()
 	defer w.Unlock()
 
-	return sortedKeys(w.ids)
+	return sortedKeys(w.data)
 }
 
-func (w *whiteboard) GetIDMap() map[string]string {
+func (w *whiteboard) AsMap() map[string]string {
 	w.Lock()
 	defer w.Unlock()
 
 	m := map[string]string{}
-	for key, value := range w.ids {
+	for key, value := range w.data {
 		if value != "" && value != deleted {
 			m[key] = value
 		}
@@ -144,84 +148,85 @@ func (w *whiteboard) GetIDMap() map[string]string {
 	return m
 }
 
-func (w *whiteboard) GetCompletedTaskMarkersKeys() []string {
+func (w *whiteboard) Get(key string) *string {
 	w.Lock()
 	defer w.Unlock()
-
-	return sortedKeys(w.completed)
-}
-
-func (w *whiteboard) GetCompletedTaskMarkers() map[string]bool {
-	w.Lock()
-	defer w.Unlock()
-
-	m := map[string]bool{}
-	for key, value := range w.completed {
-		m[key] = value
-	}
-	return m
-}
-
-func (w *whiteboard) GetID(key string) *string {
-	w.Lock()
-	defer w.Unlock()
-	id := w.ids[key]
+	id := w.data[key]
 	if id == deleted || id == "" {
 		return nil
 	}
 	return &id
 }
 
-func (w *whiteboard) SetID(key, id string) {
+func (w *whiteboard) Set(key, id string) {
 	w.Lock()
 	defer w.Unlock()
-	oldId := w.ids[key]
+	oldId := w.data[key]
 	if id != "" {
-		w.ids[key] = id
+		w.data[key] = id
 	} else {
-		delete(w.ids, key)
+		delete(w.data, key)
 	}
 	if oldId != id {
 		w.modified()
 	}
 }
 
+func (w *whiteboard) SetPtr(key string, id *string) {
+	w.Set(key, pointer.StringDeref(id, ""))
+}
+
+func (w *whiteboard) Has(key string) bool {
+	return w.Get(key) != nil
+}
+
+func (w *whiteboard) IsAlreadyDeleted(key string) bool {
+	w.Lock()
+	defer w.Unlock()
+	return w.data[key] == deleted
+}
+
+func (w *whiteboard) SetAsDeleted(key string) {
+	w.Set(key, deleted)
+}
+
+func (w *whiteboard) ImportFromFlatMap(data map[string]string) {
+	for key, value := range data {
+		parts := strings.Split(key, separator)
+		level := w
+		for i := 0; i < len(parts)-1; i++ {
+			level = level.getChild(parts[i])
+		}
+		level.Set(parts[len(parts)-1], value)
+	}
+}
+
+func (w *whiteboard) ExportAsFlatMap() map[string]string {
+	data := map[string]string{}
+	w.copyMap(data, "")
+	fillDataFromChildren(data, "", w)
+	return data
+}
+
+func (w *whiteboard) copyMap(data map[string]string, prefix string) {
+	w.Lock()
+	defer w.Unlock()
+	for k, v := range w.data {
+		data[prefix+k] = v
+	}
+}
+
+func fillDataFromChildren(data map[string]string, parentPrefix string, parent *whiteboard) {
+	for _, childKey := range parent.GetChildrenKeys() {
+		child := parent.getChild(childKey)
+		childPrefix := parentPrefix + childKey + separator
+		child.copyMap(data, childPrefix)
+		fillDataFromChildren(data, childPrefix, child)
+	}
+}
+
 func (w *whiteboard) modified() {
 	w.generation.Add(1)
-}
-
-func (w *whiteboard) SetIDPtr(key string, id *string) {
-	w.SetID(key, pointer.StringDeref(id, ""))
-}
-
-func (w *whiteboard) HasID(key string) bool {
-	return w.GetID(key) != nil
-}
-
-func (w *whiteboard) IsIDAlreadyDeleted(key string) bool {
-	w.Lock()
-	defer w.Unlock()
-	return w.ids[key] == deleted
-}
-
-func (w *whiteboard) SetIDAsDeleted(key string) {
-	w.SetID(key, deleted)
-}
-
-func (w *whiteboard) IsTaskMarkedCompleted(key string) bool {
-	w.Lock()
-	defer w.Unlock()
-	return w.completed[key]
-}
-
-func (w *whiteboard) MarkTaskCompleted(key string, completed bool) {
-	w.Lock()
-	defer w.Unlock()
-	oldCompleted := w.completed[key]
-	w.completed[key] = completed
-	if oldCompleted != completed {
-		w.modified()
-	}
 }
 
 func sortedKeys[V any](m map[string]V) []string {

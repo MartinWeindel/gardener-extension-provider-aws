@@ -48,8 +48,7 @@ import (
 )
 
 const (
-	DefaultDhcpOptionsId     = "default"
-	DefaultSecurityGroupName = "default"
+	DefaultDhcpOptionsId = "default"
 )
 
 // Client is a struct containing several clients for the different AWS services it needs to interact with.
@@ -1140,13 +1139,18 @@ func (c *Client) CreateElasticIP(ctx context.Context, eip *ElasticIP) (*ElasticI
 	}, nil
 }
 
-func (c *Client) DescribeElasticIPs(ctx context.Context, id *string, tags Tags) ([]*ElasticIP, error) {
-	input := &ec2.DescribeAddressesInput{}
-	if id != nil {
-		input.AllocationIds = []*string{id}
-	} else {
-		input.Filters = tags.ToFilters()
-	}
+func (c *Client) GetElasticIP(ctx context.Context, id string) (*ElasticIP, error) {
+	input := &ec2.DescribeAddressesInput{AllocationIds: []*string{aws.String(id)}}
+	output, err := c.describeElasticIPs(ctx, input)
+	return single(output, err)
+}
+
+func (c *Client) FindElasticIPsByTags(ctx context.Context, tags Tags) ([]*ElasticIP, error) {
+	input := &ec2.DescribeAddressesInput{Filters: tags.ToFilters()}
+	return c.describeElasticIPs(ctx, input)
+}
+
+func (c *Client) describeElasticIPs(ctx context.Context, input *ec2.DescribeAddressesInput) ([]*ElasticIP, error) {
 	output, err := c.EC2.DescribeAddressesWithContext(ctx, input)
 	if err != nil {
 		return nil, ignoreNotFound(err)
@@ -1179,13 +1183,18 @@ func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NA
 	return fromNatGateway(output.NatGateway), nil
 }
 
-func (c *Client) DescribeNATGateways(ctx context.Context, id *string, tags Tags) ([]*NATGateway, error) {
-	input := &ec2.DescribeNatGatewaysInput{}
-	if id != nil {
-		input.NatGatewayIds = []*string{id}
-	} else {
-		input.Filter = tags.ToFilters()
-	}
+func (c *Client) GetNATGateway(ctx context.Context, id string) (*NATGateway, error) {
+	input := &ec2.DescribeNatGatewaysInput{NatGatewayIds: []*string{aws.String(id)}}
+	output, err := c.describeNATGateways(ctx, input)
+	return single(output, err)
+}
+
+func (c *Client) FindNATGatewaysByTags(ctx context.Context, tags Tags) ([]*NATGateway, error) {
+	input := &ec2.DescribeNatGatewaysInput{Filter: tags.ToFilters()}
+	return c.describeNATGateways(ctx, input)
+}
+
+func (c *Client) describeNATGateways(ctx context.Context, input *ec2.DescribeNatGatewaysInput) ([]*NATGateway, error) {
 	output, err := c.EC2.DescribeNatGatewaysWithContext(ctx, input)
 	if err != nil {
 		return nil, ignoreNotFound(err)
@@ -1222,13 +1231,18 @@ func (c *Client) ImportKeyPair(ctx context.Context, keyName string, publicKey []
 	}, nil
 }
 
-func (c *Client) DescribeKeyPairs(ctx context.Context, keyName *string, tags Tags) ([]*KeyPairInfo, error) {
-	input := &ec2.DescribeKeyPairsInput{}
-	if keyName != nil {
-		input.KeyNames = []*string{keyName}
-	} else {
-		input.Filters = tags.ToFilters()
-	}
+func (c *Client) GetKeyPair(ctx context.Context, keyName string) (*KeyPairInfo, error) {
+	input := &ec2.DescribeKeyPairsInput{KeyNames: []*string{aws.String(keyName)}}
+	output, err := c.describeKeyPairs(ctx, input)
+	return single(output, err)
+}
+
+func (c *Client) FindKeyPairsByTags(ctx context.Context, tags Tags) ([]*KeyPairInfo, error) {
+	input := &ec2.DescribeKeyPairsInput{Filters: tags.ToFilters()}
+	return c.describeKeyPairs(ctx, input)
+}
+
+func (c *Client) describeKeyPairs(ctx context.Context, input *ec2.DescribeKeyPairsInput) ([]*KeyPairInfo, error) {
 	output, err := c.EC2.DescribeKeyPairsWithContext(ctx, input)
 	if err != nil {
 		return nil, ignoreNotFound(err)
@@ -1528,6 +1542,9 @@ func fromAddress(item *ec2.Address) *ElasticIP {
 }
 
 func fromNatGateway(item *ec2.NatGateway) *NATGateway {
+	if aws.StringValue(item.State) == ec2.StateDeleted || aws.StringValue(item.State) == ec2.StateDeleting {
+		return nil
+	}
 	var allocationId, publicIP string
 	for _, address := range item.NatGatewayAddresses {
 		allocationId = aws.StringValue(address.AllocationId)

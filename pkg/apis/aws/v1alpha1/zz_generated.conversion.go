@@ -424,8 +424,7 @@ func Convert_aws_EC2_To_v1alpha1_EC2(in *aws.EC2, out *EC2, s conversion.Scope) 
 
 func autoConvert_v1alpha1_FlowState_To_aws_FlowState(in *FlowState, out *aws.FlowState, s conversion.Scope) error {
 	out.Version = in.Version
-	out.ResourceIdentifiers = *(*map[string]string)(unsafe.Pointer(&in.ResourceIdentifiers))
-	out.CompletedTaskMarkers = *(*map[string]bool)(unsafe.Pointer(&in.CompletedTaskMarkers))
+	out.Data = *(*map[string]string)(unsafe.Pointer(&in.Data))
 	return nil
 }
 
@@ -436,8 +435,7 @@ func Convert_v1alpha1_FlowState_To_aws_FlowState(in *FlowState, out *aws.FlowSta
 
 func autoConvert_aws_FlowState_To_v1alpha1_FlowState(in *aws.FlowState, out *FlowState, s conversion.Scope) error {
 	out.Version = in.Version
-	out.ResourceIdentifiers = *(*map[string]string)(unsafe.Pointer(&in.ResourceIdentifiers))
-	out.CompletedTaskMarkers = *(*map[string]bool)(unsafe.Pointer(&in.CompletedTaskMarkers))
+	out.Data = *(*map[string]string)(unsafe.Pointer(&in.Data))
 	return nil
 }
 

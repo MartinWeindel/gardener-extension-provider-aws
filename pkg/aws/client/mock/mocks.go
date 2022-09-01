@@ -622,51 +622,6 @@ func (mr *MockInterfaceMockRecorder) DeleteVpcEndpoint(arg0, arg1 interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteVpcEndpoint", reflect.TypeOf((*MockInterface)(nil).DeleteVpcEndpoint), arg0, arg1)
 }
 
-// DescribeElasticIPs mocks base method.
-func (m *MockInterface) DescribeElasticIPs(arg0 context.Context, arg1 *string, arg2 client.Tags) ([]*client.ElasticIP, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeElasticIPs", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]*client.ElasticIP)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeElasticIPs indicates an expected call of DescribeElasticIPs.
-func (mr *MockInterfaceMockRecorder) DescribeElasticIPs(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeElasticIPs", reflect.TypeOf((*MockInterface)(nil).DescribeElasticIPs), arg0, arg1, arg2)
-}
-
-// DescribeKeyPairs mocks base method.
-func (m *MockInterface) DescribeKeyPairs(arg0 context.Context, arg1 *string, arg2 client.Tags) ([]*client.KeyPairInfo, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeKeyPairs", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]*client.KeyPairInfo)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeKeyPairs indicates an expected call of DescribeKeyPairs.
-func (mr *MockInterfaceMockRecorder) DescribeKeyPairs(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeKeyPairs", reflect.TypeOf((*MockInterface)(nil).DescribeKeyPairs), arg0, arg1, arg2)
-}
-
-// DescribeNATGateways mocks base method.
-func (m *MockInterface) DescribeNATGateways(arg0 context.Context, arg1 *string, arg2 client.Tags) ([]*client.NATGateway, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeNATGateways", arg0, arg1, arg2)
-	ret0, _ := ret[0].([]*client.NATGateway)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeNATGateways indicates an expected call of DescribeNATGateways.
-func (mr *MockInterfaceMockRecorder) DescribeNATGateways(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNATGateways", reflect.TypeOf((*MockInterface)(nil).DescribeNATGateways), arg0, arg1, arg2)
-}
-
 // DetachInternetGateway mocks base method.
 func (m *MockInterface) DetachInternetGateway(arg0 context.Context, arg1, arg2 string) error {
 	m.ctrl.T.Helper()
@@ -696,6 +651,21 @@ func (mr *MockInterfaceMockRecorder) FindDefaultSecurityGroupByVpcId(arg0, arg1 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDefaultSecurityGroupByVpcId", reflect.TypeOf((*MockInterface)(nil).FindDefaultSecurityGroupByVpcId), arg0, arg1)
 }
 
+// FindElasticIPsByTags mocks base method.
+func (m *MockInterface) FindElasticIPsByTags(arg0 context.Context, arg1 client.Tags) ([]*client.ElasticIP, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindElasticIPsByTags", arg0, arg1)
+	ret0, _ := ret[0].([]*client.ElasticIP)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindElasticIPsByTags indicates an expected call of FindElasticIPsByTags.
+func (mr *MockInterfaceMockRecorder) FindElasticIPsByTags(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindElasticIPsByTags", reflect.TypeOf((*MockInterface)(nil).FindElasticIPsByTags), arg0, arg1)
+}
+
 // FindInternetGatewaysByTags mocks base method.
 func (m *MockInterface) FindInternetGatewaysByTags(arg0 context.Context, arg1 client.Tags) ([]*client.InternetGateway, error) {
 	m.ctrl.T.Helper()
@@ -709,6 +679,36 @@ func (m *MockInterface) FindInternetGatewaysByTags(arg0 context.Context, arg1 cl
 func (mr *MockInterfaceMockRecorder) FindInternetGatewaysByTags(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindInternetGatewaysByTags", reflect.TypeOf((*MockInterface)(nil).FindInternetGatewaysByTags), arg0, arg1)
+}
+
+// FindKeyPairsByTags mocks base method.
+func (m *MockInterface) FindKeyPairsByTags(arg0 context.Context, arg1 client.Tags) ([]*client.KeyPairInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindKeyPairsByTags", arg0, arg1)
+	ret0, _ := ret[0].([]*client.KeyPairInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindKeyPairsByTags indicates an expected call of FindKeyPairsByTags.
+func (mr *MockInterfaceMockRecorder) FindKeyPairsByTags(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindKeyPairsByTags", reflect.TypeOf((*MockInterface)(nil).FindKeyPairsByTags), arg0, arg1)
+}
+
+// FindNATGatewaysByTags mocks base method.
+func (m *MockInterface) FindNATGatewaysByTags(arg0 context.Context, arg1 client.Tags) ([]*client.NATGateway, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindNATGatewaysByTags", arg0, arg1)
+	ret0, _ := ret[0].([]*client.NATGateway)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindNATGatewaysByTags indicates an expected call of FindNATGatewaysByTags.
+func (mr *MockInterfaceMockRecorder) FindNATGatewaysByTags(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindNATGatewaysByTags", reflect.TypeOf((*MockInterface)(nil).FindNATGatewaysByTags), arg0, arg1)
 }
 
 // FindRouteTablesByTags mocks base method.
@@ -831,6 +831,21 @@ func (mr *MockInterfaceMockRecorder) GetDNSHostedZones(arg0 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDNSHostedZones", reflect.TypeOf((*MockInterface)(nil).GetDNSHostedZones), arg0)
 }
 
+// GetElasticIP mocks base method.
+func (m *MockInterface) GetElasticIP(arg0 context.Context, arg1 string) (*client.ElasticIP, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetElasticIP", arg0, arg1)
+	ret0, _ := ret[0].(*client.ElasticIP)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetElasticIP indicates an expected call of GetElasticIP.
+func (mr *MockInterfaceMockRecorder) GetElasticIP(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetElasticIP", reflect.TypeOf((*MockInterface)(nil).GetElasticIP), arg0, arg1)
+}
+
 // GetElasticIPsAssociationIDForAllocationIDs mocks base method.
 func (m *MockInterface) GetElasticIPsAssociationIDForAllocationIDs(arg0 context.Context, arg1 []string) (map[string]*string, error) {
 	m.ctrl.T.Helper()
@@ -906,6 +921,36 @@ func (mr *MockInterfaceMockRecorder) GetInternetGateway(arg0, arg1 interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInternetGateway", reflect.TypeOf((*MockInterface)(nil).GetInternetGateway), arg0, arg1)
 }
 
+// GetKeyPair mocks base method.
+func (m *MockInterface) GetKeyPair(arg0 context.Context, arg1 string) (*client.KeyPairInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetKeyPair", arg0, arg1)
+	ret0, _ := ret[0].(*client.KeyPairInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetKeyPair indicates an expected call of GetKeyPair.
+func (mr *MockInterfaceMockRecorder) GetKeyPair(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetKeyPair", reflect.TypeOf((*MockInterface)(nil).GetKeyPair), arg0, arg1)
+}
+
+// GetNATGateway mocks base method.
+func (m *MockInterface) GetNATGateway(arg0 context.Context, arg1 string) (*client.NATGateway, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNATGateway", arg0, arg1)
+	ret0, _ := ret[0].(*client.NATGateway)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetNATGateway indicates an expected call of GetNATGateway.
+func (mr *MockInterfaceMockRecorder) GetNATGateway(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNATGateway", reflect.TypeOf((*MockInterface)(nil).GetNATGateway), arg0, arg1)
+}
+
 // GetNATGatewayAddressAllocations mocks base method.
 func (m *MockInterface) GetNATGatewayAddressAllocations(arg0 context.Context, arg1 string) (sets.String, error) {
 	m.ctrl.T.Helper()
@@ -951,19 +996,19 @@ func (mr *MockInterfaceMockRecorder) GetSecurityGroup(arg0, arg1 interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSecurityGroup", reflect.TypeOf((*MockInterface)(nil).GetSecurityGroup), arg0, arg1)
 }
 
-// GetSubnet mocks base method.
-func (m *MockInterface) GetSubnet(arg0 context.Context, arg1 string) (*client.Subnet, error) {
+// GetSubnets mocks base method.
+func (m *MockInterface) GetSubnets(arg0 context.Context, arg1 []string) ([]*client.Subnet, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSubnet", arg0, arg1)
-	ret0, _ := ret[0].(*client.Subnet)
+	ret := m.ctrl.Call(m, "GetSubnets", arg0, arg1)
+	ret0, _ := ret[0].([]*client.Subnet)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetSubnet indicates an expected call of GetSubnet.
-func (mr *MockInterfaceMockRecorder) GetSubnet(arg0, arg1 interface{}) *gomock.Call {
+// GetSubnets indicates an expected call of GetSubnets.
+func (mr *MockInterfaceMockRecorder) GetSubnets(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubnet", reflect.TypeOf((*MockInterface)(nil).GetSubnet), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubnets", reflect.TypeOf((*MockInterface)(nil).GetSubnets), arg0, arg1)
 }
 
 // GetVPCAttribute mocks base method.

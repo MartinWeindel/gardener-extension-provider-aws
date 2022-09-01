@@ -112,17 +112,20 @@ type Interface interface {
 
 	// Elastic IP
 	CreateElasticIP(ctx context.Context, eip *ElasticIP) (*ElasticIP, error)
-	DescribeElasticIPs(ctx context.Context, id *string, tags Tags) ([]*ElasticIP, error)
+	GetElasticIP(ctx context.Context, id string) (*ElasticIP, error)
+	FindElasticIPsByTags(ctx context.Context, tags Tags) ([]*ElasticIP, error)
 	DeleteElasticIP(ctx context.Context, id string) error
 
 	// Internet gateways
 	CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NATGateway, error)
-	DescribeNATGateways(ctx context.Context, id *string, tags Tags) ([]*NATGateway, error)
+	GetNATGateway(ctx context.Context, id string) (*NATGateway, error)
+	FindNATGatewaysByTags(ctx context.Context, tags Tags) ([]*NATGateway, error)
 	DeleteNATGateway(ctx context.Context, id string) error
 
 	// Key pairs
 	ImportKeyPair(ctx context.Context, keyName string, publicKey []byte, tags Tags) (*KeyPairInfo, error)
-	DescribeKeyPairs(ctx context.Context, keyName *string, tags Tags) ([]*KeyPairInfo, error)
+	GetKeyPair(ctx context.Context, keyName string) (*KeyPairInfo, error)
+	FindKeyPairsByTags(ctx context.Context, tags Tags) ([]*KeyPairInfo, error)
 	DeleteKeyPair(ctx context.Context, keyName string) error
 
 	// IAM Role

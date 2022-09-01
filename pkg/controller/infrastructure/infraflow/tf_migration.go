@@ -35,9 +35,8 @@ func MigrateTerraformStateToFlowState(state *runtime.RawExtension) (*awsapi.Flow
 	)
 
 	flowState := &awsapi.FlowState{
-		Version:              FlowStateVersion1,
-		ResourceIdentifiers:  map[string]string{},
-		CompletedTaskMarkers: map[string]bool{},
+		Version: FlowStateVersion1,
+		Data:    map[string]string{},
 	}
 
 	if state == nil {
@@ -61,36 +60,36 @@ func MigrateTerraformStateToFlowState(state *runtime.RawExtension) (*awsapi.Flow
 
 	value := tfState.Outputs[aws.VPCIDKey].Value
 	if value != "" {
-		setFlowStateResourceIdentifiers(flowState, IdentiferVPC, &value)
+		setFlowStateData(flowState, IdentiferVPC, &value)
 	}
-	setFlowStateResourceIdentifiers(flowState, IdentiferDHCPOptions,
+	setFlowStateData(flowState, IdentiferDHCPOptions,
 		tfState.GetManagedResourceInstanceID("aws_vpc_dhcp_options", "vpc_dhcp_options"))
-	setFlowStateResourceIdentifiers(flowState, IdentiferDefaultSecurityGroup,
+	setFlowStateData(flowState, IdentiferDefaultSecurityGroup,
 		tfState.GetManagedResourceInstanceID("aws_default_security_group", "default"))
-	setFlowStateResourceIdentifiers(flowState, IdentiferInternetGateway,
+	setFlowStateData(flowState, IdentiferInternetGateway,
 		tfState.GetManagedResourceInstanceID("aws_internet_gateway", "igw"))
-	setFlowStateResourceIdentifiers(flowState, IdentiferMainRouteTable,
+	setFlowStateData(flowState, IdentiferMainRouteTable,
 		tfState.GetManagedResourceInstanceID("aws_route", "public"))
-	setFlowStateResourceIdentifiers(flowState, IdentiferNodesSecurityGroup,
+	setFlowStateData(flowState, IdentiferNodesSecurityGroup,
 		tfState.GetManagedResourceInstanceID("aws_security_group", "nodes"))
 
 	if instances := tfState.GetManagedResourceInstances("aws_vpc_endpoint"); len(instances) > 0 {
 		for name, id := range instances {
 			key := ChildIdVPCEndpoints + "/" + strings.TrimPrefix(name, "vpc_gwep_")
-			setFlowStateResourceIdentifiers(flowState, key, &id)
+			setFlowStateData(flowState, key, &id)
 		}
 	}
 
-	flowState.CompletedTaskMarkers[MarkerMigratedFromTerraform] = true
+	flowState.Data[MarkerMigratedFromTerraform] = "true"
 
 	return flowState, nil
 }
 
-func setFlowStateResourceIdentifiers(state *awsapi.FlowState, key string, id *string) {
+func setFlowStateData(state *awsapi.FlowState, key string, id *string) {
 	if id == nil {
-		delete(state.ResourceIdentifiers, key)
+		delete(state.Data, key)
 	} else {
-		state.ResourceIdentifiers[key] = *id
+		state.Data[key] = *id
 	}
 }
 

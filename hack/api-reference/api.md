@@ -504,26 +504,14 @@ string
 </tr>
 <tr>
 <td>
-<code>resourceIdentifiers</code></br>
+<code>data</code></br>
 <em>
 map[string]string
 </em>
 </td>
 <td>
 <em>(Optional)</em>
-<p>ResourceIdentifiers contains the identifiers for managed AWS resources</p>
-</td>
-</tr>
-<tr>
-<td>
-<code>completedTaskMarkers</code></br>
-<em>
-map[string]bool
-</em>
-</td>
-<td>
-<em>(Optional)</em>
-<p>CompletedTaskMarkers contains info about completed one-time tasks</p>
+<p>Data contains identifiers and other values for managed AWS resources</p>
 </td>
 </tr>
 </tbody>

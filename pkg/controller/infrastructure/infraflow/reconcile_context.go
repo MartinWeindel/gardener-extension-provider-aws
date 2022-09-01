@@ -33,7 +33,8 @@ import (
 const (
 	TagKeyName            = "Name"
 	TagKeyClusterTemplate = "kubernetes.io/cluster/%s"
-	TagKeyRoleELB         = "kubernetes.io/role/elb"
+	TagKeyRolePublicELB   = "kubernetes.io/role/elb"
+	TagKeyRolePrivateELB  = "kubernetes.io/role/internal-elb"
 	TagValueCluster       = "1"
 	TagValueUse           = "use"
 
@@ -43,16 +44,18 @@ const (
 	IdentiferInternetGateway      = "InternetGateway"
 	IdentiferMainRouteTable       = "MainRouteTable"
 	IdentiferNodesSecurityGroup   = "NodesSecurityGroup"
-	IdentifierSubnet              = "Subnet"
-	IdentifierSubnetSuffix        = "SubnetSuffix"
+	IdentifierZoneSubnetWorkers   = "SubnetWorkers"
+	IdentifierZoneSubnetPublic    = "SubnetPublicUtility"
+	IdentifierZoneSubnetPrivate   = "SubnetPrivateUtility"
+	IdentifierZoneSuffix          = "Suffix"
+	IdentifierZoneNATGWElasticIP  = "NATGatewayElasticIP"
+	IdentifierZoneNATGateway      = "NATGateway"
 
 	ChildIdVPCEndpoints = "VPCEndpoints"
-	ChildIdSubnets      = "Subnets"
+	ChildIdZones        = "Zones"
 
 	MarkerMigratedFromTerraform                   = "MigratedFromTerraform"
 	MarkerLoadBalancersAndSecurityGroupsDestroyed = "LoadBalancersAndSecurityGroupsDestroyed"
-
-	Separator = "/"
 )
 
 type ReconcileContext struct {
@@ -93,7 +96,7 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 
 	rc.fillStateFromFlowState(oldFlowState)
 	if config != nil && config.Networks.VPC.ID != nil {
-		rc.state.SetIDPtr(IdentiferVPC, config.Networks.VPC.ID)
+		rc.state.SetPtr(IdentiferVPC, config.Networks.VPC.ID)
 	}
 	return rc, nil
 }
@@ -119,19 +122,10 @@ func (rc *ReconcileContext) clusterTags() awsclient.Tags {
 }
 
 func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
-	newFlowState := &awsapiv1alpha.FlowState{
+	return &awsapiv1alpha.FlowState{
 		Version: FlowStateVersion1,
+		Data:    rc.state.ExportAsFlatMap(),
 	}
-
-	newFlowState.ResourceIdentifiers = rc.state.GetIDMap()
-	fillResourceIdentifiersFromState(newFlowState.ResourceIdentifiers, "", rc.state)
-
-	markers := rc.state.GetCompletedTaskMarkers()
-	if len(markers) > 0 {
-		newFlowState.CompletedTaskMarkers = markers
-	}
-
-	return newFlowState
 }
 
 func (rc *ReconcileContext) PersistFlowState(ctx context.Context) error {
@@ -149,32 +143,9 @@ func (rc *ReconcileContext) PersistFlowState(ctx context.Context) error {
 	return nil
 }
 
-func fillResourceIdentifiersFromState(resourceIdentifiers map[string]string, parentPrefix string, whiteboard state.Whiteboard) {
-	for _, childKey := range whiteboard.GetChildrenKeys() {
-		child := whiteboard.GetChild(childKey)
-		childPrefix := parentPrefix + childKey + Separator
-		for k, v := range child.GetIDMap() {
-			key := childPrefix + k
-			resourceIdentifiers[key] = v
-		}
-		fillResourceIdentifiersFromState(resourceIdentifiers, childPrefix, child)
-	}
-}
-
 func (rc *ReconcileContext) fillStateFromFlowState(flowState *awsapi.FlowState) {
 	if flowState != nil {
-		for key, value := range flowState.ResourceIdentifiers {
-			parts := strings.Split(key, Separator)
-			w := rc.state
-			for i := 0; i < len(parts)-1; i++ {
-				w = w.GetChild(parts[i])
-			}
-			w.SetID(parts[len(parts)-1], value)
-		}
-
-		for k, v := range flowState.CompletedTaskMarkers {
-			rc.state.MarkTaskCompleted(k, v)
-		}
+		rc.state.ImportFromFlatMap(flowState.Data)
 	}
 }
 

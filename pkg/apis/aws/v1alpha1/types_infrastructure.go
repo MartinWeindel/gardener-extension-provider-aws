@@ -184,11 +184,7 @@ type SecurityGroup struct {
 type FlowState struct {
 	// Version is state structure version
 	Version string `json:"version"`
-
-	// ResourceIdentifiers contains the identifiers for managed AWS resources
+	// Data contains identifiers and other values for managed AWS resources
 	// +optional
-	ResourceIdentifiers map[string]string `json:"resourceIdentifiers,omitempty"`
-	// CompletedTaskMarkers contains info about completed one-time tasks
-	// +optional
-	CompletedTaskMarkers map[string]bool `json:"completedTaskMarkers,omitempty"`
+	Data map[string]string `json:"data,omitempty"`
 }
