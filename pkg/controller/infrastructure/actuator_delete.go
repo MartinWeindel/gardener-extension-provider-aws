@@ -17,6 +17,7 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
@@ -36,7 +37,7 @@ import (
 )
 
 func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
-	if infrastructure.Annotations != nil && infrastructure.Annotations[AnnotationKeyUseFlow] == True {
+	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
 		return a.deleteWithFlow(ctx, log, infrastructure, cluster)
 	}
 	return Delete(ctx, log, a.RESTConfig(), a.Client(), a.Decoder(), infrastructure, a.disableProjectedTokenMount)
@@ -45,15 +46,15 @@ func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *
 func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
 	log.Info("deleteWithFlow")
 
-	rctx, err := a.createReconcileContext(ctx, log, infrastructure)
+	flowContext, err := a.createFlowContext(ctx, log, infrastructure)
 	if err != nil {
 		return err
 	}
-	if err = rctx.Delete(ctx); err != nil {
-		_ = rctx.PersistFlowState(ctx, true)
+	if err = flowContext.Delete(ctx); err != nil {
+		_ = flowContext.PersistState(ctx, true)
 		return err
 	}
-	return rctx.PersistFlowState(ctx, true)
+	return flowContext.PersistState(ctx, true)
 }
 
 // Delete deletes the given Infrastructure.

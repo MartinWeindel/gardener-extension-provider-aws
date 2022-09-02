@@ -71,7 +71,7 @@ const (
 	MarkerLoadBalancersAndSecurityGroupsDestroyed = "LoadBalancersAndSecurityGroupsDestroyed"
 )
 
-type ReconcileContext struct {
+type FlowContext struct {
 	infra      *extensionsv1alpha1.Infrastructure
 	config     *awsapi.InfrastructureConfig
 	logger     logr.Logger
@@ -87,10 +87,10 @@ type ReconcileContext struct {
 
 type FlowStatePersistor func(ctx context.Context, flowState *awsapiv1alpha.FlowState) error
 
-func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
+func NewFlowContext(logger logr.Logger, awsClient awsclient.Interface,
 	infra *extensionsv1alpha1.Infrastructure, config *awsapi.InfrastructureConfig,
-	oldFlowState *awsapi.FlowState, persistor FlowStatePersistor) (*ReconcileContext, error) {
-	rc := &ReconcileContext{
+	oldFlowState *awsapi.FlowState, persistor FlowStatePersistor) (*FlowContext, error) {
+	rc := &FlowContext{
 		infra:              infra,
 		config:             config,
 		logger:             logger,
@@ -115,72 +115,72 @@ func NewReconcileContext(logger logr.Logger, awsClient awsclient.Interface,
 	return rc, nil
 }
 
-func (rc *ReconcileContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
-	return rc.config
+func (c *FlowContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
+	return c.config
 }
 
-func (rc *ReconcileContext) commonTagsWithSuffix(suffix string) awsclient.Tags {
-	tags := rc.commonTags.Clone()
-	tags[TagKeyName] = fmt.Sprintf("%s-%s", rc.infra.Namespace, suffix)
+func (c *FlowContext) commonTagsWithSuffix(suffix string) awsclient.Tags {
+	tags := c.commonTags.Clone()
+	tags[TagKeyName] = fmt.Sprintf("%s-%s", c.infra.Namespace, suffix)
 	return tags
 }
 
-func (rc *ReconcileContext) tagKeyCluster() string {
-	return fmt.Sprintf(TagKeyClusterTemplate, rc.infra.Namespace)
+func (c *FlowContext) tagKeyCluster() string {
+	return fmt.Sprintf(TagKeyClusterTemplate, c.infra.Namespace)
 }
 
-func (rc *ReconcileContext) clusterTags() awsclient.Tags {
+func (c *FlowContext) clusterTags() awsclient.Tags {
 	tags := awsclient.Tags{}
-	tags[rc.tagKeyCluster()] = TagValueCluster
+	tags[c.tagKeyCluster()] = TagValueCluster
 	return tags
 }
 
-func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
+func (c *FlowContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
 	return &awsapiv1alpha.FlowState{
 		Version: FlowStateVersion1,
-		Data:    rc.state.ExportAsFlatMap(),
+		Data:    c.state.ExportAsFlatMap(),
 	}
 }
 
-func (rc *ReconcileContext) PersistFlowState(ctx context.Context, force bool) error {
-	if !force && rc.lastPersistedAt.Add(10*time.Second).After(time.Now()) {
+func (c *FlowContext) PersistState(ctx context.Context, force bool) error {
+	if !force && c.lastPersistedAt.Add(10*time.Second).After(time.Now()) {
 		return nil
 	}
-	currentGeneration := rc.state.Generation()
-	if rc.lastPersistedGeneration == currentGeneration {
+	currentGeneration := c.state.Generation()
+	if c.lastPersistedGeneration == currentGeneration {
 		return nil
 	}
-	if rc.flowStatePersistor != nil {
-		newFlowState := rc.UpdatedFlowState()
-		if err := rc.flowStatePersistor(ctx, newFlowState); err != nil {
+	if c.flowStatePersistor != nil {
+		newFlowState := c.UpdatedFlowState()
+		if err := c.flowStatePersistor(ctx, newFlowState); err != nil {
 			return err
 		}
 	}
-	rc.lastPersistedGeneration = currentGeneration
-	rc.lastPersistedAt = time.Now()
+	c.lastPersistedGeneration = currentGeneration
+	c.lastPersistedAt = time.Now()
 	return nil
 }
 
-func (rc *ReconcileContext) PersistingState(fn flow.TaskFn) flow.TaskFn {
+func (c *FlowContext) PersistingState(fn flow.TaskFn) flow.TaskFn {
 	return func(ctx context.Context) error {
 		err := fn(ctx)
-		if perr := rc.PersistFlowState(ctx, false); perr != nil {
-			rc.logger.Error(perr, "persisting state failed")
+		if perr := c.PersistState(ctx, false); perr != nil {
+			c.logger.Error(perr, "persisting state failed")
 		}
 		return err
 	}
 }
 
-func (rc *ReconcileContext) fillStateFromFlowState(flowState *awsapi.FlowState) {
+func (c *FlowContext) fillStateFromFlowState(flowState *awsapi.FlowState) {
 	if flowState != nil {
-		rc.state.ImportFromFlatMap(flowState.Data)
+		c.state.ImportFromFlatMap(flowState.Data)
 	}
 }
 
-func (rc *ReconcileContext) vpcEndpointServiceNamePrefix() string {
-	return fmt.Sprintf("com.amazonaws.%s.", rc.infra.Spec.Region)
+func (c *FlowContext) vpcEndpointServiceNamePrefix() string {
+	return fmt.Sprintf("com.amazonaws.%s.", c.infra.Spec.Region)
 }
 
-func (rc *ReconcileContext) extractVpcEndpointName(item *awsclient.VpcEndpoint) string {
-	return strings.TrimPrefix(item.ServiceName, rc.vpcEndpointServiceNamePrefix())
+func (c *FlowContext) extractVpcEndpointName(item *awsclient.VpcEndpoint) string {
+	return strings.TrimPrefix(item.ServiceName, c.vpcEndpointServiceNamePrefix())
 }

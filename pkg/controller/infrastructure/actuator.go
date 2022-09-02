@@ -32,7 +32,6 @@ import (
 
 const (
 	AnnotationKeyUseFlow = "aws.provider.extensions.gardener.cloud/use-flow"
-	True                 = "true"
 )
 
 type actuator struct {

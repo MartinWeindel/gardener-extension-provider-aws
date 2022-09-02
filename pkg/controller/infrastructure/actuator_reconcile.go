@@ -37,7 +37,7 @@ import (
 )
 
 func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
-	if infrastructure.Annotations != nil && infrastructure.Annotations[AnnotationKeyUseFlow] == True {
+	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
 		return a.reconcileWithFlow(ctx, log, infrastructure, cluster)
 	}
 
@@ -56,8 +56,8 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
 }
 
-func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger,
-	infrastructure *extensionsv1alpha1.Infrastructure) (*infraflow.ReconcileContext, error) {
+func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
+	infrastructure *extensionsv1alpha1.Infrastructure) (*infraflow.FlowContext, error) {
 	var err error
 	infrastructureConfig := &awsapi.InfrastructureConfig{}
 	if _, _, err = a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
@@ -90,12 +90,12 @@ func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger,
 	persistor := func(ctx context.Context, flowState *awsv1alpha1.FlowState) error {
 		return a.updateProviderStatusFromFlowState(ctx, infrastructure, infrastructureConfig, flowState)
 	}
-	rctx, err := infraflow.NewReconcileContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, persistor)
+	rctx, err := infraflow.NewFlowContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, persistor)
 	if err != nil {
 		return nil, err
 	}
 	if migrated {
-		if err = rctx.PersistFlowState(ctx, true); err != nil {
+		if err = rctx.PersistState(ctx, true); err != nil {
 			return nil, err
 		}
 	}
@@ -106,15 +106,15 @@ func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger,
 func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
 	log.Info("reconcileWithFlow")
 
-	rctx, err := a.createReconcileContext(ctx, log, infrastructure)
+	flowContext, err := a.createFlowContext(ctx, log, infrastructure)
 	if err != nil {
 		return err
 	}
-	if err = rctx.Reconcile(ctx); err != nil {
-		_ = rctx.PersistFlowState(ctx, true)
+	if err = flowContext.Reconcile(ctx); err != nil {
+		_ = flowContext.PersistState(ctx, true)
 		return err
 	}
-	return rctx.PersistFlowState(ctx, true)
+	return flowContext.PersistState(ctx, true)
 }
 
 func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure,

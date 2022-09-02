@@ -551,7 +551,7 @@ func newInfrastructure(namespace string, providerConfig *awsv1alpha1.Infrastruct
 		},
 	}
 	if useFlow {
-		infra.Annotations = map[string]string{infrastructure.AnnotationKeyUseFlow: infrastructure.True}
+		infra.Annotations = map[string]string{infrastructure.AnnotationKeyUseFlow: "true"}
 	}
 	return infra, nil
 }
