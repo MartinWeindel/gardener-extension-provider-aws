@@ -26,6 +26,7 @@ import (
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
@@ -131,12 +132,31 @@ func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infras
 }
 
 func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState, infrastructureConfig *awsapi.InfrastructureConfig) (*awsv1alpha1.InfrastructureStatus, error) {
-	/*
-		subnets, err := computeProviderStatusSubnets(infrastructureConfig, output)
-		if err != nil {
-			return nil, nil, err
+	var subnets []awsv1alpha1.Subnet
+	prefix := infraflow.ChildIdZones + state.Separator
+	for k, v := range flowState.Data {
+		if strings.HasPrefix(k, prefix) {
+			parts := strings.Split(k, state.Separator)
+			if len(parts) != 3 {
+				continue
+			}
+			var purpose string
+			switch parts[2] {
+			case infraflow.IdentifierZoneSubnetPublic:
+				purpose = awsapi.PurposePublic
+			case infraflow.IdentifierZoneSubnetWorkers:
+				purpose = awsapi.PurposeNodes
+			default:
+				continue
+			}
+			subnets = append(subnets, awsv1alpha1.Subnet{
+				ID:      v,
+				Purpose: purpose,
+				Zone:    parts[1],
+			})
 		}
-	*/
+	}
+
 	return &awsv1alpha1.InfrastructureStatus{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: awsv1alpha1.SchemeGroupVersion.String(),
@@ -144,7 +164,7 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState, infras
 		},
 		VPC: awsv1alpha1.VPCStatus{
 			ID:      flowState.Data[infraflow.IdentifierVPC],
-			Subnets: nil, //subnets,
+			Subnets: subnets,
 			SecurityGroups: []awsv1alpha1.SecurityGroup{
 				{
 					Purpose: awsapi.PurposeNodes,
@@ -153,19 +173,19 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState, infras
 			},
 		},
 		EC2: awsv1alpha1.EC2{
-			KeyName: "???", //output[aws.SSHKeyName],
+			KeyName: flowState.Data[infraflow.NameKeyPair],
 		},
 		IAM: awsv1alpha1.IAM{
 			InstanceProfiles: []awsv1alpha1.InstanceProfile{
 				{
 					Purpose: awsapi.PurposeNodes,
-					Name:    "???", //output[aws.IAMInstanceProfileNodes],
+					Name:    flowState.Data[infraflow.NameIAMInstanceProfile],
 				},
 			},
 			Roles: []awsv1alpha1.Role{
 				{
 					Purpose: awsapi.PurposeNodes,
-					ARN:     "???", //output[aws.NodesRole],
+					ARN:     flowState.Data[infraflow.ARNIAMRole],
 				},
 			},
 		},

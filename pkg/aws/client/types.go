@@ -421,6 +421,7 @@ type IAMRole struct {
 	RoleName                 string
 	Path                     string
 	AssumeRolePolicyDocument string
+	ARN                      string
 }
 
 type IAMInstanceProfile struct {

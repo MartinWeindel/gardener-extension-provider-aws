@@ -1606,6 +1606,7 @@ func fromIAMRole(item *iam.Role) *IAMRole {
 		RoleName:                 aws.StringValue(item.RoleName),
 		Path:                     aws.StringValue(item.Path),
 		AssumeRolePolicyDocument: aws.StringValue(item.AssumeRolePolicyDocument),
+		ARN:                      aws.StringValue(item.Arn),
 	}
 }
 

@@ -28,7 +28,7 @@ import (
 
 const (
 	deleted   = "<deleted>"
-	separator = "/"
+	Separator = "/"
 )
 
 type Whiteboard interface {
@@ -207,7 +207,7 @@ func (w *whiteboard) SetAsDeleted(key string) {
 
 func (w *whiteboard) ImportFromFlatMap(data map[string]string) {
 	for key, value := range data {
-		parts := strings.Split(key, separator)
+		parts := strings.Split(key, Separator)
 		level := w
 		for i := 0; i < len(parts)-1; i++ {
 			level = level.getChild(parts[i])
@@ -234,7 +234,7 @@ func (w *whiteboard) copyMap(data map[string]string, prefix string) {
 func fillDataFromChildren(data map[string]string, parentPrefix string, parent *whiteboard) {
 	for _, childKey := range parent.GetChildrenKeys() {
 		child := parent.getChild(childKey)
-		childPrefix := parentPrefix + childKey + separator
+		childPrefix := parentPrefix + childKey + Separator
 		child.copyMap(data, childPrefix)
 		fillDataFromChildren(data, childPrefix, child)
 	}

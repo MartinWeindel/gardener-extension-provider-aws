@@ -28,7 +28,6 @@ import (
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
-	"github.com/gardener/gardener/pkg/utils/flow"
 	"github.com/go-logr/logr"
 )
 
@@ -59,7 +58,9 @@ const (
 	IdentifierIAMRole                          = "IAMRole"
 	IdentifierIAMInstanceProfile               = "IAMInstanceProfile"
 	IdentifierIAMRolePolicy                    = "IAMRolePolicy"
-	IdentifierKeyPair                          = "KeyPair"
+	NameKeyPair                                = "KeyPair"
+	NameIAMInstanceProfile                     = "IAMInstanceProfileName"
+	ARNIAMRole                                 = "IAMRoleARN"
 
 	ChildIdVPCEndpoints = "VPCEndpoints"
 	ChildIdZones        = "Zones"
@@ -159,16 +160,6 @@ func (c *FlowContext) PersistState(ctx context.Context, force bool) error {
 	c.lastPersistedGeneration = currentGeneration
 	c.lastPersistedAt = time.Now()
 	return nil
-}
-
-func (c *FlowContext) PersistingState(fn flow.TaskFn) flow.TaskFn {
-	return func(ctx context.Context) error {
-		err := fn(ctx)
-		if perr := c.PersistState(ctx, false); perr != nil {
-			c.logger.Error(perr, "persisting state failed")
-		}
-		return err
-	}
 }
 
 func (c *FlowContext) fillStateFromFlowState(flowState *awsapi.FlowState) {

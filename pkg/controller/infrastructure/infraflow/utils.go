@@ -19,70 +19,35 @@ package infraflow
 
 import (
 	"context"
-	"fmt"
-	"reflect"
 
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener/pkg/utils/flow"
-	"k8s.io/apimachinery/pkg/util/sets"
 )
 
-type zoneDependencies map[string]flow.TaskIDs
+type zoneDependencies map[string][]flow.TaskIDer
 
 func newZoneDependencies() zoneDependencies {
 	return zoneDependencies{}
 }
 
-func (d zoneDependencies) Insert(zoneName string, ids ...flow.TaskIDer) {
+func (d zoneDependencies) Append(zoneName string, taskIDers ...flow.TaskIDer) {
 	taskIDs := d[zoneName]
 	if taskIDs == nil {
-		taskIDs = flow.TaskIDs{}
+		taskIDs = []flow.TaskIDer{}
 		d[zoneName] = taskIDs
 	}
-	taskIDs.Insert(ids...)
+	d[zoneName] = append(d[zoneName], taskIDers...)
 }
 
-func (d zoneDependencies) Get(zoneName string) flow.TaskIDs {
+func (d zoneDependencies) Get(zoneName string) []flow.TaskIDer {
 	return d[zoneName]
 }
 
-func PartialEqualExcluding[T any](a, b T, fields ...string) (equal bool, firstDiffField string, err error) {
-	av := reflect.ValueOf(a)
-	if av.Kind() == reflect.Ptr {
-		av = av.Elem()
-	}
-	bv := reflect.ValueOf(b)
-	if bv.Kind() == reflect.Ptr {
-		bv = bv.Elem()
-	}
-
-	if av.Type() != bv.Type() {
-		err = fmt.Errorf("different input types: %s != %s", av.Type(), bv.Type())
-		return
-	}
-	if av.Kind() != reflect.Struct {
-		err = fmt.Errorf("not a struct type: %s, kind: %s", av.Type(), av.Kind())
-		return
-	}
-
-	excluded := sets.NewString(fields...)
-	for i := 0; i < av.NumField(); i++ {
-		fieldName := av.Type().Field(i).Name
-		if excluded.Has(fieldName) {
-			continue
-		}
-
-		if !reflect.DeepEqual(av.Field(i).Interface(), bv.Field(i).Interface()) {
-			firstDiffField = fieldName
-			return
-		}
-	}
-
-	equal = true
-	return
-}
-
-func unused(_ interface{}) {
+func copyTaskIDers(array []flow.TaskIDer, more ...flow.TaskIDer) []flow.TaskIDer {
+	var copy []flow.TaskIDer
+	copy = append(copy, array...)
+	copy = append(copy, more...)
+	return copy
 }
 
 func diffByID[T any](desired, current []T, unique func(item T) string) (toBeDeleted, toBeCreated []T, toBeChecked []struct{ desired, current T }) {

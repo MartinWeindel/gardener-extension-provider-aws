@@ -48,81 +48,99 @@ func (c *FlowContext) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+func (c *FlowContext) addTask(g *flow.Graph, name string, fn flow.TaskFn, dependencies ...flow.TaskIDer) flow.TaskIDer {
+	task := flow.Task{
+		Name: name,
+		Fn:   c.wrapTaskFn(name, fn),
+	}
+
+	if len(dependencies) > 0 {
+		task.Dependencies = flow.NewTaskIDs(dependencies...)
+	}
+
+	return g.Add(task)
+}
+
+func (c *FlowContext) wrapTaskFn(name string, fn flow.TaskFn) flow.TaskFn {
+	return func(ctx context.Context) error {
+		err := fn(ctx)
+		if err != nil {
+			err = fmt.Errorf("failed to %s: %w", name, err)
+		}
+		if perr := c.PersistState(ctx, false); perr != nil {
+			if err != nil {
+				c.logger.Error(perr, "persisting state failed")
+			} else {
+				err = perr
+			}
+		}
+		return err
+	}
+}
+
 func (c *FlowContext) buildReconcileGraph() *flow.Graph {
+	createVPC := c.config.Networks.VPC.ID == nil
 	g := flow.NewGraph("AWS infrastructure reconcilation")
 
-	createVPC := c.config.Networks.VPC.ID == nil
-	ensureDhcpOptions := g.Add(flow.Task{
-		Name: "ensure DHCP options for VPC",
-		Fn: flow.TaskFn(c.ensureDhcpOptions).
+	ensureDhcpOptions := c.addTask(g, "ensure DHCP options for VPC",
+		flow.TaskFn(c.ensureDhcpOptions).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(createVPC)})
-	ensureVpc := g.Add(flow.Task{
-		Name: "ensure VPC",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureVpc)).
+			DoIf(createVPC))
+
+	ensureVpc := c.addTask(g, "ensure VPC",
+		flow.TaskFn(c.ensureVpc).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureDhcpOptions),
-	})
-	ensureDefaultSecurityGroup := g.Add(flow.Task{
-		Name: "ensure default security group",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureDefaultSecurityGroup)).
+		ensureDhcpOptions)
+
+	ensureDefaultSecurityGroup := c.addTask(g, "ensure default security group",
+		flow.TaskFn(c.ensureDefaultSecurityGroup).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(createVPC),
-		Dependencies: flow.NewTaskIDs(ensureVpc),
-	})
-	ensureInternetGateway := g.Add(flow.Task{
-		Name: "ensure internet gateway",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureInternetGateway)).
+		ensureVpc)
+
+	ensureInternetGateway := c.addTask(g, "ensure internet gateway",
+		flow.TaskFn(c.ensureInternetGateway).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(createVPC),
-		Dependencies: flow.NewTaskIDs(ensureVpc),
-	})
-	_ = g.Add(flow.Task{
-		Name: "ensure gateway endpoints",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureGatewayEndpoints)).
+		ensureVpc)
+
+	_ = c.addTask(g, "ensure gateway endpoints",
+		flow.TaskFn(c.ensureGatewayEndpoints).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway),
-	})
-	ensureMainRouteTable := g.Add(flow.Task{
-		Name: "ensure main route table",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureMainRouteTable)).
+		ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway)
+
+	ensureMainRouteTable := c.addTask(g, "ensure main route table",
+		flow.TaskFn(c.ensureMainRouteTable).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway),
-	})
-	ensureNodesSecurityGroup := g.Add(flow.Task{
-		Name: "ensure nodes security group",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureNodesSecurityGroup)).
+		ensureVpc, ensureDefaultSecurityGroup, ensureInternetGateway)
+
+	ensureNodesSecurityGroup := c.addTask(g, "ensure nodes security group",
+		flow.TaskFn(c.ensureNodesSecurityGroup).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureVpc),
-	})
-	_ = g.Add(flow.Task{
-		Name: "ensure zones resources",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureZones)).
+		ensureVpc)
+
+	_ = c.addTask(g, "ensure zones resources",
+		flow.TaskFn(c.ensureZones).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureVpc, ensureNodesSecurityGroup, ensureMainRouteTable),
-	})
-	ensureIAMRole := g.Add(flow.Task{
-		Name: "ensure IAM role",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureIAMRole)).
+		ensureVpc, ensureNodesSecurityGroup, ensureMainRouteTable)
+
+	ensureIAMRole := c.addTask(g, "ensure IAM role",
+		flow.TaskFn(c.ensureIAMRole).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
+
+	_ = c.addTask(g, "ensure IAM instance profile",
+		flow.TaskFn(c.ensureIAMInstanceProfile).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-	})
-	_ = g.Add(flow.Task{
-		Name: "ensure IAM instance profile",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureIAMInstanceProfile)).
+		ensureIAMRole)
+
+	_ = c.addTask(g, "ensure IAM role policy",
+		flow.TaskFn(c.ensureIAMRolePolicy).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureIAMRole),
-	})
-	_ = g.Add(flow.Task{
-		Name: "ensure IAM role policy",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureIAMRolePolicy)).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureIAMRole),
-	})
-	_ = g.Add(flow.Task{
-		Name: "ensure key pair",
-		Fn: flow.TaskFn(c.PersistingState(c.ensureKeyPair)).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-	})
+		ensureIAMRole)
+
+	_ = c.addTask(g, "ensure key pair",
+		flow.TaskFn(c.ensureKeyPair).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
 
 	return g
 }
@@ -516,11 +534,11 @@ func (c *FlowContext) ensureZones(ctx context.Context) error {
 	dependencies := newZoneDependencies()
 	for _, item := range toBeCreated {
 		taskID := c.addSubnetReconcileTasks(g, item, nil)
-		dependencies.Insert(item.AvailabilityZone, taskID)
+		dependencies.Append(item.AvailabilityZone, taskID)
 	}
 	for _, pair := range toBeChecked {
 		taskID := c.addSubnetReconcileTasks(g, pair.desired, pair.current)
-		dependencies.Insert(pair.desired.AvailabilityZone, taskID)
+		dependencies.Append(pair.desired.AvailabilityZone, taskID)
 	}
 	for _, zone := range c.config.Networks.Zones {
 		c.addZoneReconcileTasks(g, &zone, dependencies.Get(zone.Name))
@@ -540,7 +558,7 @@ func (c *FlowContext) addZoneDeletionTasksBySubnets(g *flow.Graph, toBeDeleted [
 	dependencies := newZoneDependencies()
 	for zoneName := range toBeDeletedZones {
 		taskID := c.addZoneDeletionTasks(g, zoneName)
-		dependencies.Insert(zoneName, taskID)
+		dependencies.Append(zoneName, taskID)
 	}
 	for _, item := range toBeDeleted {
 		c.addSubnetDeletionTasks(g, item, dependencies.Get(item.AvailabilityZone))
@@ -608,79 +626,66 @@ func (c *FlowContext) subnetSuffix(zoneName string) string {
 	}
 }
 
-func (c *FlowContext) addSubnetReconcileTasks(g *flow.Graph, desired, current *awsclient.Subnet) flow.TaskID {
+func (c *FlowContext) addSubnetReconcileTasks(g *flow.Graph, desired, current *awsclient.Subnet) flow.TaskIDer {
 	zoneName, subnetKey := c.getSubnetKey(desired)
 	suffix := fmt.Sprintf("%s-%s", zoneName, subnetKey)
-	return g.Add(flow.Task{
-		Name: "ensure subnet " + suffix,
-		Fn: flow.TaskFn(c.PersistingState(c.ensureSubnet(desired, current))).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-	})
+	return c.addTask(g, "ensure subnet "+suffix,
+		flow.TaskFn(c.ensureSubnet(desired, current)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
 }
 
-func (c *FlowContext) addZoneReconcileTasks(g *flow.Graph, zone *aws.Zone, dependencies flow.TaskIDs) {
-	ensureElasticIP := g.Add(flow.Task{
-		Name: "ensure NAT gateway elastic IP " + zone.Name,
-		Fn: flow.TaskFn(c.PersistingState(c.ensureElasticIP(zone))).
+func (c *FlowContext) addZoneReconcileTasks(g *flow.Graph, zone *aws.Zone, dependencies []flow.TaskIDer) {
+	ensureElasticIP := c.addTask(g, "ensure NAT gateway elastic IP "+zone.Name,
+		flow.TaskFn(c.ensureElasticIP(zone)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: dependencies,
-	})
-	ensureNATGateway := g.Add(flow.Task{
-		Name: "ensure NAT gateway " + zone.Name,
-		Fn: flow.TaskFn(c.PersistingState(c.ensureNATGateway(zone))).
+		dependencies...)
+
+	ensureNATGateway := c.addTask(g, "ensure NAT gateway "+zone.Name,
+		flow.TaskFn(c.ensureNATGateway(zone)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: dependencies.Copy().Insert(ensureElasticIP),
-	})
-	ensureRoutingTable := g.Add(flow.Task{
-		Name: "ensure route table " + zone.Name,
-		Fn: flow.TaskFn(c.PersistingState(c.ensurePrivateRoutingTable(zone.Name))).
+		copyTaskIDers(dependencies, ensureElasticIP)...)
+
+	ensureRoutingTable := c.addTask(g, "ensure route table "+zone.Name,
+		flow.TaskFn(c.ensurePrivateRoutingTable(zone.Name)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: dependencies.Copy().Insert(ensureNATGateway),
-	})
-	g.Add(flow.Task{
-		Name: "ensure route table associations " + zone.Name,
-		Fn: flow.TaskFn(c.PersistingState(c.ensureRoutingTableAssociations(zone.Name))).
+		copyTaskIDers(dependencies, ensureNATGateway)...)
+
+	_ = c.addTask(g, "ensure route table associations "+zone.Name,
+		flow.TaskFn(c.ensureRoutingTableAssociations(zone.Name)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: dependencies.Copy().Insert(ensureRoutingTable),
-	})
+		copyTaskIDers(dependencies, ensureRoutingTable)...)
 }
 
-func (c *FlowContext) addZoneDeletionTasks(g *flow.Graph, zoneName string) flow.TaskID {
-	deleteRoutingTableAssocs := g.Add(flow.Task{
-		Name: "delete route table associations " + zoneName,
-		Fn: flow.TaskFn(c.PersistingState(c.deleteRoutingTableAssociations(zoneName))).
+func (c *FlowContext) addZoneDeletionTasks(g *flow.Graph, zoneName string) flow.TaskIDer {
+	deleteRoutingTableAssocs := c.addTask(g, "delete route table associations "+zoneName,
+		flow.TaskFn(c.deleteRoutingTableAssociations(zoneName)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
+
+	deleteRoutingTable := c.addTask(g, "delete route table "+zoneName,
+		flow.TaskFn(c.deletePrivateRoutingTable(zoneName)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-	})
-	deleteRoutingTable := g.Add(flow.Task{
-		Name: "delete route table " + zoneName,
-		Fn: flow.TaskFn(c.PersistingState(c.deletePrivateRoutingTable(zoneName))).
+		deleteRoutingTableAssocs)
+
+	deleteNATGateway := c.addTask(g, "delete NAT gateway "+zoneName,
+		flow.TaskFn(c.deleteNATGateway(zoneName)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(deleteRoutingTableAssocs),
-	})
-	deleteNATGateway := g.Add(flow.Task{
-		Name: "delete NAT gateway " + zoneName,
-		Fn: flow.TaskFn(c.PersistingState(c.deleteNATGateway(zoneName))).
+		deleteRoutingTable)
+
+	_ = c.addTask(g, "delete NAT gateway elastic IP "+zoneName,
+		flow.TaskFn(c.deleteElasticIP(zoneName)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(deleteRoutingTable),
-	})
-	g.Add(flow.Task{
-		Name: "delete NAT gateway elastic IP " + zoneName,
-		Fn: flow.TaskFn(c.PersistingState(c.deleteElasticIP(zoneName))).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(deleteNATGateway),
-	})
+		deleteNATGateway)
+
 	return deleteNATGateway
 }
 
-func (c *FlowContext) addSubnetDeletionTasks(g *flow.Graph, item *awsclient.Subnet, dependencies flow.TaskIDs) {
+func (c *FlowContext) addSubnetDeletionTasks(g *flow.Graph, item *awsclient.Subnet, dependencies []flow.TaskIDer) {
 	zoneName, subnetKey := c.getSubnetKey(item)
 	suffix := fmt.Sprintf("%s-%s", zoneName, subnetKey)
-	g.Add(flow.Task{
-		Name: "delete subnet resource " + suffix,
-		Fn: flow.TaskFn(c.PersistingState(c.deleteSubnet(item))).
+	_ = c.addTask(g, "delete subnet resource "+suffix,
+		flow.TaskFn(c.deleteSubnet(item)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: dependencies,
-	})
+		dependencies...)
 }
 
 func (c *FlowContext) deleteSubnet(item *awsclient.Subnet) flow.TaskFn {
@@ -1025,6 +1030,7 @@ func (c *FlowContext) ensureIAMRole(ctx context.Context) error {
 
 	if current != nil {
 		c.state.Set(IdentifierIAMRole, current.RoleId)
+		c.state.Set(ARNIAMRole, current.ARN)
 		return nil
 	}
 
@@ -1033,6 +1039,7 @@ func (c *FlowContext) ensureIAMRole(ctx context.Context) error {
 		return err
 	}
 	c.state.Set(IdentifierIAMRole, created.RoleId)
+	c.state.Set(ARNIAMRole, created.ARN)
 	return nil
 }
 
@@ -1049,6 +1056,7 @@ func (c *FlowContext) ensureIAMInstanceProfile(ctx context.Context) error {
 
 	if current != nil {
 		c.state.Set(IdentifierIAMInstanceProfile, current.InstanceProfileId)
+		c.state.Set(NameIAMInstanceProfile, current.InstanceProfileName)
 		if _, err := c.updater.UpdateIAMInstanceProfile(ctx, desired, current); err != nil {
 			return err
 		}
@@ -1060,6 +1068,7 @@ func (c *FlowContext) ensureIAMInstanceProfile(ctx context.Context) error {
 		return err
 	}
 	c.state.Set(IdentifierIAMInstanceProfile, created.InstanceProfileId)
+	c.state.Set(NameIAMInstanceProfile, created.InstanceProfileName)
 	if _, err := c.updater.UpdateIAMInstanceProfile(ctx, desired, created); err != nil {
 		return err
 	}
@@ -1148,14 +1157,14 @@ func (c *FlowContext) ensureKeyPair(ctx context.Context) error {
 	}
 
 	if current != nil {
-		c.state.Set(IdentifierKeyPair, desired.KeyName)
+		c.state.Set(NameKeyPair, desired.KeyName)
 		return nil
 	}
 
 	if _, err := c.client.ImportKeyPair(ctx, desired.KeyName, c.infra.Spec.SSHPublicKey, c.commonTags); err != nil {
 		return err
 	}
-	c.state.Set(IdentifierKeyPair, desired.KeyName)
+	c.state.Set(NameKeyPair, desired.KeyName)
 	return nil
 }
 
