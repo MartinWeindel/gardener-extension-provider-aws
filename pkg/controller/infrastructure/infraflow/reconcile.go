@@ -18,9 +18,11 @@
 package infraflow
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"reflect"
+	"text/template"
 	"time"
 
 	"github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
@@ -506,37 +508,43 @@ func (rc *ReconcileContext) EnsureZones(ctx context.Context) error {
 	toBeDeleted, toBeCreated, toBeChecked := diffByID(desired, current, func(item *awsclient.Subnet) string {
 		return item.AvailabilityZone + "-" + item.CidrBlock
 	})
-	toBeDeletedZones := sets.NewString()
-	for _, item := range toBeDeleted {
-		toBeDeletedZones.Insert(getZoneName(item))
-	}
+
 	g := flow.NewGraph("AWS infrastructure reconcilation: zones")
 
-	dependencies := map[string]flow.TaskIDs{}
-	for zoneName := range toBeDeletedZones {
-		taskID := rc.addZoneDeletionTasks(g, zoneName)
-		dependencies[zoneName].Insert(taskID)
-	}
-	for _, item := range toBeDeleted {
-		rc.addSubnetDeletionTasks(g, item, dependencies[item.AvailabilityZone])
-	}
+	rc.addZoneDeletionTasksBySubnets(g, toBeDeleted)
 
+	dependencies := newZoneDependencies()
 	for _, item := range toBeCreated {
 		taskID := rc.addSubnetReconcileTasks(g, item, nil)
-		dependencies[item.AvailabilityZone].Insert(taskID)
+		dependencies.Insert(item.AvailabilityZone, taskID)
 	}
 	for _, pair := range toBeChecked {
 		taskID := rc.addSubnetReconcileTasks(g, pair.desired, pair.current)
-		dependencies[pair.desired.AvailabilityZone].Insert(taskID)
+		dependencies.Insert(pair.desired.AvailabilityZone, taskID)
 	}
 	for _, zone := range rc.config.Networks.Zones {
-		rc.addZoneReconcileTasks(g, &zone, dependencies[zone.Name])
+		rc.addZoneReconcileTasks(g, &zone, dependencies.Get(zone.Name))
 	}
 	f := g.Compile()
 	if err := f.Run(ctx, flow.Opts{Log: rc.logger}); err != nil {
 		return flow.Causes(err)
 	}
 	return nil
+}
+
+func (rc *ReconcileContext) addZoneDeletionTasksBySubnets(g *flow.Graph, toBeDeleted []*awsclient.Subnet) {
+	toBeDeletedZones := sets.NewString()
+	for _, item := range toBeDeleted {
+		toBeDeletedZones.Insert(getZoneName(item))
+	}
+	dependencies := newZoneDependencies()
+	for zoneName := range toBeDeletedZones {
+		taskID := rc.addZoneDeletionTasks(g, zoneName)
+		dependencies.Insert(zoneName, taskID)
+	}
+	for _, item := range toBeDeleted {
+		rc.addSubnetDeletionTasks(g, item, dependencies.Get(item.AvailabilityZone))
+	}
 }
 
 func (rc *ReconcileContext) collectExistingSubnets(ctx context.Context) ([]*awsclient.Subnet, error) {
@@ -639,7 +647,7 @@ func (rc *ReconcileContext) addZoneReconcileTasks(g *flow.Graph, zone *aws.Zone,
 
 func (rc *ReconcileContext) addZoneDeletionTasks(g *flow.Graph, zoneName string) flow.TaskID {
 	ensureDeletedRoutingTableAssocs := g.Add(flow.Task{
-		Name: "ensure route table associations " + zoneName,
+		Name: "ensure deletion of route table associations " + zoneName,
 		Fn: flow.TaskFn(rc.EnsureDeletedRoutingTableAssociations(zoneName)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
@@ -840,6 +848,7 @@ func (rc *ReconcileContext) EnsurePrivateRoutingTable(zoneName string) flow.Task
 
 		if current != nil {
 			child.Set(IdentifierZoneRouteTable, current.RouteTableId)
+			child.SetObject(ObjectZoneRouteTable, current)
 			if _, err := rc.updater.UpdateRouteTable(ctx, desired, current); err != nil {
 				return err
 			}
@@ -851,6 +860,7 @@ func (rc *ReconcileContext) EnsurePrivateRoutingTable(zoneName string) flow.Task
 			return err
 		}
 		child.Set(IdentifierZoneRouteTable, created.RouteTableId)
+		child.SetObject(ObjectZoneRouteTable, created)
 		if _, err := rc.updater.UpdateRouteTable(ctx, desired, created); err != nil {
 			return err
 		}
@@ -1056,11 +1066,7 @@ func (rc *ReconcileContext) EnsureIAMInstanceProfile(ctx context.Context) error 
 	return nil
 }
 
-func (rc *ReconcileContext) EnsureIAMRolePolicy(ctx context.Context) error {
-	desired := &awsclient.IAMRolePolicy{
-		PolicyName: fmt.Sprintf("%s-nodes", rc.infra.Namespace),
-		RoleName:   fmt.Sprintf("%s-nodes", rc.infra.Namespace),
-		PolicyDocument: `{
+const iamRolePolicyTemplate = `{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -1088,16 +1094,34 @@ func (rc *ReconcileContext) EnsureIAMRolePolicy(ctx context.Context) error {
       ]
     }{{ end }}
   ]
-}`,
+}`
+
+func (rc *ReconcileContext) EnsureIAMRolePolicy(ctx context.Context) error {
+	enableECRAccess := true
+	if v := rc.config.EnableECRAccess; v != nil {
+		enableECRAccess = *v
 	}
-	pseudoID := desired.PolicyName + "-" + desired.RoleName
+	t, err := template.New("policyDocument").Parse(iamRolePolicyTemplate)
+	if err != nil {
+		return fmt.Errorf("parsing policyDocument template failed: %s", err)
+	}
+	var buffer bytes.Buffer
+	if err := t.Execute(&buffer, map[string]any{"enableECRAccess": enableECRAccess}); err != nil {
+		return fmt.Errorf("executing policyDocument template failed: %s", err)
+	}
+
+	desired := &awsclient.IAMRolePolicy{
+		PolicyName:     fmt.Sprintf("%s-nodes", rc.infra.Namespace),
+		RoleName:       fmt.Sprintf("%s-nodes", rc.infra.Namespace),
+		PolicyDocument: buffer.String(),
+	}
 	current, err := rc.client.GetIAMRolePolicy(ctx, desired.PolicyName, desired.RoleName)
 	if err != nil {
 		return err
 	}
 
 	if current != nil {
-		rc.state.Set(IdentifierIAMRolePolicy, pseudoID)
+		rc.state.Set(IdentifierIAMRolePolicy, "true")
 		if current.PolicyDocument != desired.PolicyDocument {
 			if err := rc.client.PutIAMRolePolicy(ctx, desired); err != nil {
 				return err
@@ -1109,14 +1133,14 @@ func (rc *ReconcileContext) EnsureIAMRolePolicy(ctx context.Context) error {
 	if err := rc.client.PutIAMRolePolicy(ctx, desired); err != nil {
 		return err
 	}
-	rc.state.Set(IdentifierIAMRolePolicy, pseudoID)
+	rc.state.Set(IdentifierIAMRolePolicy, "true")
 	return nil
 }
 
 func (rc *ReconcileContext) EnsureKeyPair(ctx context.Context) error {
 	desired := &awsclient.KeyPairInfo{
 		Tags:    rc.commonTags,
-		KeyName: fmt.Sprintf("%s-ssh-publickey"),
+		KeyName: fmt.Sprintf("%s-ssh-publickey", rc.infra.Namespace),
 	}
 	current, err := rc.client.GetKeyPair(ctx, desired.KeyName)
 	if err != nil {

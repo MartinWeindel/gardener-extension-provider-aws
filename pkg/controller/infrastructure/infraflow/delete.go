@@ -46,7 +46,7 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
 			DoIf(rc.state.Has(IdentifierVPC) && rc.state.Get(MarkerLoadBalancersAndSecurityGroupsDestroyed) == nil)})
 	_ = g.Add(flow.Task{
-		Name: "ensure key pair",
+		Name: "ensure deletion of key pair",
 		Fn: flow.TaskFn(rc.EnsureDeletedKeyPair).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
@@ -61,7 +61,7 @@ func (rc *ReconcileContext) buildDeleteGraph() *flow.Graph {
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
 	_ = g.Add(flow.Task{
-		Name: "ensure IAM role",
+		Name: "ensure deletion of IAM role",
 		Fn: flow.TaskFn(rc.EnsureDeletedIAMRole).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 		Dependencies: flow.NewTaskIDs(ensureDeletedIAMInstanceProfile, ensureDeletedIAMRolePolicy),
@@ -275,13 +275,66 @@ func (rc *ReconcileContext) EnsureDeletedZones(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	g := flow.NewGraph("AWS infrastructure destruction: subnets")
-	for _, item := range current {
-		rc.addSubnetDeletionTasks(g, item)
-	}
+	g := flow.NewGraph("AWS infrastructure destruction: zones")
+	rc.addZoneDeletionTasksBySubnets(g, current)
 	f := g.Compile()
 	if err := f.Run(ctx, flow.Opts{Log: rc.logger}); err != nil {
 		return flow.Causes(err)
 	}
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedIAMRole(ctx context.Context) error {
+	if rc.state.IsAlreadyDeleted(IdentifierIAMRole) {
+		return nil
+	}
+
+	roleName := fmt.Sprintf("%s-nodes", rc.infra.Namespace)
+	if err := rc.client.DeleteIAMRole(ctx, roleName); err != nil {
+		return err
+	}
+	rc.state.SetAsDeleted(IdentifierIAMRole)
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedIAMInstanceProfile(ctx context.Context) error {
+	if rc.state.IsAlreadyDeleted(IdentifierIAMInstanceProfile) {
+		return nil
+	}
+	instanceProfileName := fmt.Sprintf("%s-nodes", rc.infra.Namespace)
+	if err := rc.client.DeleteIAMInstanceProfile(ctx, instanceProfileName); err != nil {
+		return err
+	}
+	rc.state.SetAsDeleted(IdentifierIAMInstanceProfile)
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedIAMRolePolicy(ctx context.Context) error {
+	if rc.state.IsAlreadyDeleted(IdentifierIAMRolePolicy) {
+		return nil
+	}
+
+	policyName := fmt.Sprintf("%s-nodes", rc.infra.Namespace)
+	roleName := fmt.Sprintf("%s-nodes", rc.infra.Namespace)
+	if err := rc.client.RemoveRoleFromIAMInstanceProfile(ctx, policyName, roleName); err != nil {
+		return err
+	}
+	if err := rc.client.DeleteIAMRolePolicy(ctx, policyName, roleName); err != nil {
+		return err
+	}
+	rc.state.SetAsDeleted(IdentifierIAMRolePolicy)
+	return nil
+}
+
+func (rc *ReconcileContext) EnsureDeletedKeyPair(ctx context.Context) error {
+	if rc.state.IsAlreadyDeleted(IdentifierKeyPair) {
+		return nil
+	}
+
+	keyName := fmt.Sprintf("%s-ssh-publickey", rc.infra.Namespace)
+	if err := rc.client.DeleteKeyPair(ctx, keyName); err != nil {
+		return err
+	}
+	rc.state.SetAsDeleted(IdentifierKeyPair)
 	return nil
 }

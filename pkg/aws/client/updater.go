@@ -113,6 +113,10 @@ outerDelete:
 				continue outerDelete
 			}
 		}
+		if cr.GatewayId != nil && *cr.GatewayId == "local" {
+			// ignore local gateway route
+			continue outerDelete
+		}
 		if err := u.client.DeleteRoute(ctx, current.RouteTableId, cr); err != nil {
 			return nil, err
 		}

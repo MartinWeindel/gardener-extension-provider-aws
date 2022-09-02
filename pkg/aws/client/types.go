@@ -407,6 +407,7 @@ type NATGateway struct {
 	EIPAllocationId string
 	PublicIP        string
 	SubnetId        string
+	State           string
 }
 
 type KeyPairInfo struct {

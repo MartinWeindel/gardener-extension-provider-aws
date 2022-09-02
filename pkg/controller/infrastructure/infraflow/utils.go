@@ -23,8 +23,28 @@ import (
 	"reflect"
 
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
+	"github.com/gardener/gardener/pkg/utils/flow"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
+
+type zoneDependencies map[string]flow.TaskIDs
+
+func newZoneDependencies() zoneDependencies {
+	return zoneDependencies{}
+}
+
+func (d zoneDependencies) Insert(zoneName string, ids ...flow.TaskIDer) {
+	taskIDs := d[zoneName]
+	if taskIDs == nil {
+		taskIDs = flow.TaskIDs{}
+		d[zoneName] = taskIDs
+	}
+	taskIDs.Insert(ids...)
+}
+
+func (d zoneDependencies) Get(zoneName string) flow.TaskIDs {
+	return d[zoneName]
+}
 
 func PartialEqualExcluding[T any](a, b T, fields ...string) (equal bool, firstDiffField string, err error) {
 	av := reflect.ValueOf(a)

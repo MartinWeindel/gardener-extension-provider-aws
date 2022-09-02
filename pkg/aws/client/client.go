@@ -895,7 +895,7 @@ func (c *Client) AttachInternetGateway(ctx context.Context, vpcId, internetGatew
 		VpcId:             aws.String(vpcId),
 	}
 	_, err := c.EC2.AttachInternetGatewayWithContext(ctx, input)
-	return err
+	return ignoreAlreadyAssociated(err)
 }
 
 func (c *Client) DetachInternetGateway(ctx context.Context, vpcId, internetGatewayId string) error {
@@ -1195,6 +1195,16 @@ func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NA
 	if err != nil {
 		return nil, err
 	}
+	if err = c.Wait(ctx, func(ctx context.Context) (done bool, err error) {
+		if item, err := c.GetNATGateway(ctx, *output.NatGateway.NatGatewayId); err != nil {
+			return false, err
+		} else {
+			return item.State == ec2.StateAvailable, nil
+		}
+	}); err != nil {
+		return nil, err
+	}
+
 	return fromNatGateway(output.NatGateway), nil
 }
 
@@ -1316,7 +1326,7 @@ func (c *Client) GetIAMRole(ctx context.Context, roleName string) (*IAMRole, err
 	}
 	output, err := c.IAM.GetRoleWithContext(ctx, input)
 	if err != nil {
-		return nil, err
+		return nil, ignoreNotFound(err)
 	}
 	return fromIAMRole(output.Role), nil
 }
@@ -1357,10 +1367,7 @@ func (c *Client) GetIAMInstanceProfile(ctx context.Context, profileName string) 
 	}
 	output, err := c.IAM.GetInstanceProfileWithContext(ctx, input)
 	if err != nil {
-		if IsNotFoundError(err) {
-			return nil, nil
-		}
-		return nil, err
+		return nil, ignoreNotFound(err)
 	}
 	return fromIAMInstanceProfile(output.InstanceProfile), nil
 }
@@ -1380,7 +1387,7 @@ func (c *Client) RemoveRoleFromIAMInstanceProfile(ctx context.Context, profileNa
 		RoleName:            aws.String(roleName),
 	}
 	_, err := c.IAM.RemoveRoleFromInstanceProfileWithContext(ctx, input)
-	return err
+	return ignoreNotFound(err)
 }
 
 func (c *Client) DeleteIAMInstanceProfile(ctx context.Context, profileName string) error {
@@ -1448,10 +1455,19 @@ func (c *Client) Wait(ctx context.Context, condition wait.ConditionWithContextFu
 	return wait.PollImmediateUntilWithContext(ctx, c.PollInterval, condition)
 }
 
-// IsNotFoundError returns true if the given error is a awserr.Error indicating that a AWS resource was not found.
+// IsNotFoundError returns true if the given error is a awserr.Error indicating that an AWS resource was not found.
 func IsNotFoundError(err error) bool {
 	if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == elb.ErrCodeAccessPointNotFoundException ||
+		aerr.Code() == iam.ErrCodeNoSuchEntityException ||
 		strings.HasSuffix(aerr.Code(), ".NotFound")) {
+		return true
+	}
+	return false
+}
+
+// IsAlreadyAssociatedError returns true if the given error is a awserr.Error indicating that an AWS resource was already associated.
+func IsAlreadyAssociatedError(err error) bool {
+	if aerr, ok := err.(awserr.Error); ok && aerr.Code() == "Resource.AlreadyAssociated" {
 		return true
 	}
 	return false
@@ -1459,6 +1475,13 @@ func IsNotFoundError(err error) bool {
 
 func ignoreNotFound(err error) error {
 	if err == nil || IsNotFoundError(err) {
+		return nil
+	}
+	return err
+}
+
+func ignoreAlreadyAssociated(err error) error {
+	if err == nil || IsAlreadyAssociatedError(err) {
 		return nil
 	}
 	return err
@@ -1565,6 +1588,7 @@ func fromNatGateway(item *ec2.NatGateway) *NATGateway {
 		EIPAllocationId: allocationId,
 		PublicIP:        publicIP,
 		SubnetId:        aws.StringValue(item.SubnetId),
+		State:           aws.StringValue(item.State),
 	}
 }
 
