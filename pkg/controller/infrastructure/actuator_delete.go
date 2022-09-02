@@ -50,9 +50,10 @@ func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastr
 		return err
 	}
 	if err = rctx.Delete(ctx); err != nil {
+		_ = rctx.PersistFlowState(ctx, true)
 		return err
 	}
-	return rctx.PersistFlowState(ctx)
+	return rctx.PersistFlowState(ctx, true)
 }
 
 // Delete deletes the given Infrastructure.

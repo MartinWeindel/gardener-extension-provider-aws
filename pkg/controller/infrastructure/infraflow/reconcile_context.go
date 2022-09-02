@@ -21,12 +21,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	"github.com/gardener/gardener/pkg/utils/flow"
 	"github.com/go-logr/logr"
 )
 
@@ -80,6 +82,7 @@ type ReconcileContext struct {
 	state                   state.Whiteboard
 	flowStatePersistor      FlowStatePersistor
 	lastPersistedGeneration int64
+	lastPersistedAt         time.Time
 }
 
 type FlowStatePersistor func(ctx context.Context, flowState *awsapiv1alpha.FlowState) error
@@ -139,7 +142,10 @@ func (rc *ReconcileContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
 	}
 }
 
-func (rc *ReconcileContext) PersistFlowState(ctx context.Context) error {
+func (rc *ReconcileContext) PersistFlowState(ctx context.Context, force bool) error {
+	if !force && rc.lastPersistedAt.Add(10*time.Second).After(time.Now()) {
+		return nil
+	}
 	currentGeneration := rc.state.Generation()
 	if rc.lastPersistedGeneration == currentGeneration {
 		return nil
@@ -151,7 +157,18 @@ func (rc *ReconcileContext) PersistFlowState(ctx context.Context) error {
 		}
 	}
 	rc.lastPersistedGeneration = currentGeneration
+	rc.lastPersistedAt = time.Now()
 	return nil
+}
+
+func (rc *ReconcileContext) PersistingState(fn flow.TaskFn) flow.TaskFn {
+	return func(ctx context.Context) error {
+		err := fn(ctx)
+		if perr := rc.PersistFlowState(ctx, false); perr != nil {
+			rc.logger.Error(perr, "persisting state failed")
+		}
+		return err
+	}
 }
 
 func (rc *ReconcileContext) fillStateFromFlowState(flowState *awsapi.FlowState) {

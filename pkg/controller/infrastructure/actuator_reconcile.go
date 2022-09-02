@@ -95,8 +95,7 @@ func (a *actuator) createReconcileContext(ctx context.Context, log logr.Logger,
 		return nil, err
 	}
 	if migrated {
-
-		if err = rctx.PersistFlowState(ctx); err != nil {
+		if err = rctx.PersistFlowState(ctx, true); err != nil {
 			return nil, err
 		}
 	}
@@ -112,9 +111,10 @@ func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infra
 		return err
 	}
 	if err = rctx.Reconcile(ctx); err != nil {
+		_ = rctx.PersistFlowState(ctx, true)
 		return err
 	}
-	return rctx.PersistFlowState(ctx)
+	return rctx.PersistFlowState(ctx, true)
 }
 
 func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure,
