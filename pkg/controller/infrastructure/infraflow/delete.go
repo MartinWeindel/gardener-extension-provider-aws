@@ -42,85 +42,85 @@ func (c *FlowContext) buildDeleteGraph() *flow.Graph {
 	deleteVPC := c.config.Networks.VPC.ID == nil && c.state.Has(IdentifierVPC)
 	destroyLoadBalancersAndSecurityGroups := g.Add(flow.Task{
 		Name: "Destroying Kubernetes load balancers and security groups",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted)).
+		Fn: flow.TaskFn(c.PersistingState(c.deleteKubernetesLoadBalancersAndSecurityGroups)).
 			RetryUntilTimeout(10*time.Second, 5*time.Minute).
 			DoIf(c.state.Has(IdentifierVPC) && c.state.Get(MarkerLoadBalancersAndSecurityGroupsDestroyed) == nil)})
 	_ = g.Add(flow.Task{
-		Name: "ensure deletion of key pair",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedKeyPair)).
+		Name: "delete key pair",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteKeyPair)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
-	ensureDeletedIAMInstanceProfile := g.Add(flow.Task{
-		Name: "ensure deletion of IAM instance profile",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedIAMInstanceProfile)).
+	deleteIAMInstanceProfile := g.Add(flow.Task{
+		Name: "delete IAM instance profile",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteIAMInstanceProfile)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
-	ensureDeletedIAMRolePolicy := g.Add(flow.Task{
-		Name: "ensure deletion of IAM role policy",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedIAMRolePolicy)).
+	deleteIAMRolePolicy := g.Add(flow.Task{
+		Name: "delete IAM role policy",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteIAMRolePolicy)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
 	_ = g.Add(flow.Task{
-		Name: "ensure deletion of IAM role",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedIAMRole)).
+		Name: "delete IAM role",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteIAMRole)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureDeletedIAMInstanceProfile, ensureDeletedIAMRolePolicy),
+		Dependencies: flow.NewTaskIDs(deleteIAMInstanceProfile, deleteIAMRolePolicy),
 	})
-	ensureDeletedSubnets := g.Add(flow.Task{
-		Name: "ensure deletion of zones resources",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedZones)).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-	})
-	ensureDeletedNodesSecurityGroup := g.Add(flow.Task{
-		Name: "ensure deletion of nodes security group",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedNodesSecurityGroup)).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureDeletedSubnets),
-	})
-	ensureDeletedMainRouteTable := g.Add(flow.Task{
-		Name: "ensure deletion of main route table",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedMainRouteTable)).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		Dependencies: flow.NewTaskIDs(ensureDeletedSubnets),
-	})
-	ensureDeletedGatewayEndpoints := g.Add(flow.Task{
-		Name: "ensure deletion of gateway endpoints",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedGatewayEndpoints)).
+	deleteSubnets := g.Add(flow.Task{
+		Name: "delete zones resources",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteZones)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
 	})
-	ensureDeletedInternetGateway := g.Add(flow.Task{
-		Name: "ensure deletion of internet gateway",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedInternetGateway)).
+	deleteNodesSecurityGroup := g.Add(flow.Task{
+		Name: "delete nodes security group",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteNodesSecurityGroup)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(deleteSubnets),
+	})
+	deleteMainRouteTable := g.Add(flow.Task{
+		Name: "delete main route table",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteMainRouteTable)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+		Dependencies: flow.NewTaskIDs(deleteSubnets),
+	})
+	deleteGatewayEndpoints := g.Add(flow.Task{
+		Name: "delete gateway endpoints",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteGatewayEndpoints)).
+			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
+	})
+	deleteInternetGateway := g.Add(flow.Task{
+		Name: "delete internet gateway",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteInternetGateway)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(ensureDeletedGatewayEndpoints, ensureDeletedMainRouteTable),
+		Dependencies: flow.NewTaskIDs(deleteGatewayEndpoints, deleteMainRouteTable),
 	})
-	ensureDeletedDefaultSecurityGroup := g.Add(flow.Task{
-		Name: "ensure deletion of default security group",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedDefaultSecurityGroup)).
+	deleteDefaultSecurityGroup := g.Add(flow.Task{
+		Name: "delete default security group",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteDefaultSecurityGroup)).
 			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(ensureDeletedGatewayEndpoints),
+		Dependencies: flow.NewTaskIDs(deleteGatewayEndpoints),
 	})
-	ensureDeletedVpc := g.Add(flow.Task{
-		Name: "ensure deletion of VPC",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedVpc)).
+	deleteVpc := g.Add(flow.Task{
+		Name: "delete VPC",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteVpc)).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
 			DoIf(deleteVPC),
-		Dependencies: flow.NewTaskIDs(ensureDeletedInternetGateway, ensureDeletedDefaultSecurityGroup, ensureDeletedNodesSecurityGroup, destroyLoadBalancersAndSecurityGroups),
+		Dependencies: flow.NewTaskIDs(deleteInternetGateway, deleteDefaultSecurityGroup, deleteNodesSecurityGroup, destroyLoadBalancersAndSecurityGroups),
 	})
 	_ = g.Add(flow.Task{
-		Name: "ensure deletion of DHCP options for VPC",
-		Fn: flow.TaskFn(c.PersistingState(c.EnsureDeletedDhcpOptions)).
+		Name: "delete DHCP options for VPC",
+		Fn: flow.TaskFn(c.PersistingState(c.deleteDhcpOptions)).
 			RetryUntilTimeout(5*time.Second, 5*time.Minute).
 			DoIf(deleteVPC && !c.state.IsAlreadyDeleted(IdentifierDHCPOptions)),
-		Dependencies: flow.NewTaskIDs(ensureDeletedVpc),
+		Dependencies: flow.NewTaskIDs(deleteVpc),
 	})
 
 	return g
 }
 
-func (c *FlowContext) EnsureKubernetesLoadBalancersAndSecurityGroupsDeleted(ctx context.Context) error {
+func (c *FlowContext) deleteKubernetesLoadBalancersAndSecurityGroups(ctx context.Context) error {
 	if err := DestroyKubernetesLoadBalancersAndSecurityGroups(ctx, c.client, *c.state.Get(IdentifierVPC), c.infra.Namespace); err != nil {
 		return gardencorev1beta1helper.DeprecatedDetermineError(fmt.Errorf("Failed to destroy load balancers and security groups: %w", err))
 	}
@@ -154,13 +154,13 @@ func DestroyKubernetesLoadBalancersAndSecurityGroups(ctx context.Context, awsCli
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedDefaultSecurityGroup(ctx context.Context) error {
+func (c *FlowContext) deleteDefaultSecurityGroup(ctx context.Context) error {
 	// nothing to do, it is deleted automatically together with VPC
 	c.state.SetAsDeleted(IdentifierDefaultSecurityGroup)
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedInternetGateway(ctx context.Context) error {
+func (c *FlowContext) deleteInternetGateway(ctx context.Context) error {
 	current, err := findExisting(ctx, c.state.Get(IdentifierInternetGateway), c.commonTags,
 		c.client.GetInternetGateway, c.client.FindInternetGatewaysByTags)
 	if err != nil {
@@ -179,7 +179,7 @@ func (c *FlowContext) EnsureDeletedInternetGateway(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedGatewayEndpoints(ctx context.Context) error {
+func (c *FlowContext) deleteGatewayEndpoints(ctx context.Context) error {
 	child := c.state.GetChild(ChildIdVPCEndpoints)
 	current, err := c.collectExistingVPCEndpoints(ctx)
 	if err != nil {
@@ -201,7 +201,7 @@ func (c *FlowContext) EnsureDeletedGatewayEndpoints(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedVpc(ctx context.Context) error {
+func (c *FlowContext) deleteVpc(ctx context.Context) error {
 	current, err := findExisting(ctx, c.state.Get(IdentifierVPC), c.commonTags,
 		c.client.GetVpc, c.client.FindVpcsByTags)
 	if err != nil {
@@ -218,7 +218,7 @@ func (c *FlowContext) EnsureDeletedVpc(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedDhcpOptions(ctx context.Context) error {
+func (c *FlowContext) deleteDhcpOptions(ctx context.Context) error {
 	current, err := findExisting(ctx, c.state.Get(IdentifierDHCPOptions), c.commonTags,
 		c.client.GetVpcDhcpOptions, c.client.FindVpcDhcpOptionsByTags)
 	if err != nil {
@@ -234,7 +234,7 @@ func (c *FlowContext) EnsureDeletedDhcpOptions(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedMainRouteTable(ctx context.Context) error {
+func (c *FlowContext) deleteMainRouteTable(ctx context.Context) error {
 	current, err := findExisting(ctx, c.state.Get(IdentifierMainRouteTable), c.commonTags,
 		c.client.GetRouteTable, c.client.FindRouteTablesByTags)
 	if err != nil {
@@ -251,7 +251,7 @@ func (c *FlowContext) EnsureDeletedMainRouteTable(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedNodesSecurityGroup(ctx context.Context) error {
+func (c *FlowContext) deleteNodesSecurityGroup(ctx context.Context) error {
 	groupName := fmt.Sprintf("%s-nodes", c.infra.Namespace)
 	current, err := findExisting(ctx, c.state.Get(IdentifierNodesSecurityGroup), c.commonTagsWithSuffix("nodes"),
 		c.client.GetSecurityGroup, c.client.FindSecurityGroupsByTags,
@@ -270,7 +270,7 @@ func (c *FlowContext) EnsureDeletedNodesSecurityGroup(ctx context.Context) error
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedZones(ctx context.Context) error {
+func (c *FlowContext) deleteZones(ctx context.Context) error {
 	current, err := c.collectExistingSubnets(ctx)
 	if err != nil {
 		return err
@@ -284,7 +284,7 @@ func (c *FlowContext) EnsureDeletedZones(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedIAMRole(ctx context.Context) error {
+func (c *FlowContext) deleteIAMRole(ctx context.Context) error {
 	if c.state.IsAlreadyDeleted(IdentifierIAMRole) {
 		return nil
 	}
@@ -297,7 +297,7 @@ func (c *FlowContext) EnsureDeletedIAMRole(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedIAMInstanceProfile(ctx context.Context) error {
+func (c *FlowContext) deleteIAMInstanceProfile(ctx context.Context) error {
 	if c.state.IsAlreadyDeleted(IdentifierIAMInstanceProfile) {
 		return nil
 	}
@@ -309,7 +309,7 @@ func (c *FlowContext) EnsureDeletedIAMInstanceProfile(ctx context.Context) error
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedIAMRolePolicy(ctx context.Context) error {
+func (c *FlowContext) deleteIAMRolePolicy(ctx context.Context) error {
 	if c.state.IsAlreadyDeleted(IdentifierIAMRolePolicy) {
 		return nil
 	}
@@ -326,7 +326,7 @@ func (c *FlowContext) EnsureDeletedIAMRolePolicy(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) EnsureDeletedKeyPair(ctx context.Context) error {
+func (c *FlowContext) deleteKeyPair(ctx context.Context) error {
 	if c.state.IsAlreadyDeleted(IdentifierKeyPair) {
 		return nil
 	}
