@@ -106,7 +106,7 @@ resource "aws_security_group_rule" "nodes_tcp_all" {
   from_port         = 30000
   to_port           = 32767
   protocol          = "tcp"
-  cidr_blocks       = []
+  cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = aws_security_group.nodes.id
 }
 

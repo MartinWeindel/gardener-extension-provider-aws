@@ -486,15 +486,15 @@ func (c *Client) ListKubernetesSecurityGroups(ctx context.Context, vpcID, cluste
 		Filters: []*ec2.Filter{
 			{
 				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(vpcID)},
+				Values: aws.StringSlice([]string{vpcID}),
 			},
 			{
 				Name:   aws.String("tag-key"),
-				Values: []*string{aws.String(fmt.Sprintf("kubernetes.io/cluster/%s", clusterName))},
+				Values: aws.StringSlice([]string{fmt.Sprintf("kubernetes.io/cluster/%s", clusterName)}),
 			},
 			{
 				Name:   aws.String("tag-value"),
-				Values: []*string{aws.String("owned")},
+				Values: aws.StringSlice([]string{"owned"}),
 			},
 		},
 	})
@@ -531,7 +531,7 @@ func (c *Client) CreateVpcDhcpOptions(ctx context.Context, options *DhcpOptions)
 }
 
 func (c *Client) GetVpcDhcpOptions(ctx context.Context, id string) (*DhcpOptions, error) {
-	input := &ec2.DescribeDhcpOptionsInput{DhcpOptionsIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeDhcpOptionsInput{DhcpOptionsIds: aws.StringSlice([]string{id})}
 	output, err := c.describeVpcDhcpOptions(ctx, input)
 	return single(output, err)
 }
@@ -584,7 +584,7 @@ func (c *Client) UpdateVpcAttribute(ctx context.Context, vpcId, attributeName st
 		if _, err := c.EC2.ModifyVpcAttribute(input); err != nil {
 			return err
 		}
-		if err := c.Wait(ctx, func(ctx context.Context) (bool, error) {
+		if err := c.PollImmediateUntil(ctx, func(ctx context.Context) (bool, error) {
 			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(vpcId), ec2.VpcAttributeNameEnableDnsSupport)
 			return b == value, err
 		}); err != nil {
@@ -601,7 +601,7 @@ func (c *Client) UpdateVpcAttribute(ctx context.Context, vpcId, attributeName st
 		if _, err := c.EC2.ModifyVpcAttribute(input); err != nil {
 			return err
 		}
-		if err := c.Wait(ctx, func(ctx context.Context) (bool, error) {
+		if err := c.PollImmediateUntil(ctx, func(ctx context.Context) (bool, error) {
 			b, err := c.describeVpcAttributeWithContext(ctx, aws.String(vpcId), ec2.VpcAttributeNameEnableDnsHostnames)
 			return b == value, err
 		}); err != nil {
@@ -633,7 +633,7 @@ func (c *Client) DeleteVpc(ctx context.Context, id string) error {
 }
 
 func (c *Client) GetVpc(ctx context.Context, id string) (*VPC, error) {
-	input := &ec2.DescribeVpcsInput{VpcIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeVpcsInput{VpcIds: aws.StringSlice([]string{id})}
 	output, err := c.describeVpcs(ctx, input)
 	return single(output, err)
 }
@@ -808,7 +808,7 @@ func (c *Client) prepareRules(groupId string, rules []*SecurityGroupRule) (ingre
 }
 
 func (c *Client) GetSecurityGroup(ctx context.Context, id string) (*SecurityGroup, error) {
-	input := &ec2.DescribeSecurityGroupsInput{GroupIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeSecurityGroupsInput{GroupIds: aws.StringSlice([]string{id})}
 	output, err := c.describeSecurityGroups(ctx, input)
 	return single(output, err)
 }
@@ -908,7 +908,7 @@ func (c *Client) DetachInternetGateway(ctx context.Context, vpcId, internetGatew
 }
 
 func (c *Client) GetInternetGateway(ctx context.Context, id string) (*InternetGateway, error) {
-	input := &ec2.DescribeInternetGatewaysInput{InternetGatewayIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeInternetGatewaysInput{InternetGatewayIds: aws.StringSlice([]string{id})}
 	output, err := c.describeInternetGateways(ctx, input)
 	return single(output, err)
 }
@@ -916,6 +916,15 @@ func (c *Client) GetInternetGateway(ctx context.Context, id string) (*InternetGa
 func (c *Client) FindInternetGatewaysByTags(ctx context.Context, tags Tags) ([]*InternetGateway, error) {
 	input := &ec2.DescribeInternetGatewaysInput{Filters: tags.ToFilters()}
 	return c.describeInternetGateways(ctx, input)
+}
+
+func (c *Client) FindInternetGatewayByVPC(ctx context.Context, vpcId string) (*InternetGateway, error) {
+	input := &ec2.DescribeInternetGatewaysInput{Filters: []*ec2.Filter{{
+		Name:   aws.String("attachment.vpc-id"),
+		Values: aws.StringSlice([]string{vpcId}),
+	}}}
+	output, err := c.describeInternetGateways(ctx, input)
+	return single(output, err)
 }
 
 func (c *Client) describeInternetGateways(ctx context.Context, input *ec2.DescribeInternetGatewaysInput) ([]*InternetGateway, error) {
@@ -1039,7 +1048,7 @@ func (c *Client) DeleteRoute(ctx context.Context, routeTableId string, route *Ro
 }
 
 func (c *Client) GetRouteTable(ctx context.Context, id string) (*RouteTable, error) {
-	input := &ec2.DescribeRouteTablesInput{RouteTableIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeRouteTablesInput{RouteTableIds: aws.StringSlice([]string{id})}
 	output, err := c.describeRouteTables(ctx, input)
 	return single(output, err)
 }
@@ -1129,8 +1138,17 @@ func (c *Client) DeleteSubnet(ctx context.Context, id string) error {
 	input := &ec2.DeleteSubnetInput{
 		SubnetId: aws.String(id),
 	}
-	_, err := c.EC2.DeleteSubnetWithContext(ctx, input)
-	return ignoreNotFound(err)
+	var realErr error
+	err := c.PollImmediateUntil(ctx, func(ctx context.Context) (done bool, err error) {
+		_, realErr = c.EC2.DeleteSubnetWithContext(ctx, input)
+		return ignoreNotFound(realErr) == nil, nil
+	})
+	if err != nil {
+		if realErr != nil {
+			return realErr
+		}
+	}
+	return err
 }
 
 func (c *Client) CreateElasticIP(ctx context.Context, eip *ElasticIP) (*ElasticIP, error) {
@@ -1155,7 +1173,7 @@ func (c *Client) CreateElasticIP(ctx context.Context, eip *ElasticIP) (*ElasticI
 }
 
 func (c *Client) GetElasticIP(ctx context.Context, id string) (*ElasticIP, error) {
-	input := &ec2.DescribeAddressesInput{AllocationIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeAddressesInput{AllocationIds: aws.StringSlice([]string{id})}
 	output, err := c.describeElasticIPs(ctx, input)
 	return single(output, err)
 }
@@ -1181,8 +1199,17 @@ func (c *Client) DeleteElasticIP(ctx context.Context, id string) error {
 	input := &ec2.ReleaseAddressInput{
 		AllocationId: aws.String(id),
 	}
-	_, err := c.EC2.ReleaseAddressWithContext(ctx, input)
-	return ignoreNotFound(err)
+	var realErr error
+	err := c.PollImmediateUntil(ctx, func(ctx context.Context) (done bool, err error) {
+		_, realErr = c.EC2.ReleaseAddressWithContext(ctx, input)
+		return ignoreNotFound(realErr) == nil, nil
+	})
+	if err != nil {
+		if realErr != nil {
+			return realErr
+		}
+	}
+	return err
 }
 
 func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NATGateway, error) {
@@ -1195,7 +1222,7 @@ func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NA
 	if err != nil {
 		return nil, err
 	}
-	if err = c.Wait(ctx, func(ctx context.Context) (done bool, err error) {
+	if err = c.PollImmediateUntil(ctx, func(ctx context.Context) (done bool, err error) {
 		if item, err := c.GetNATGateway(ctx, *output.NatGateway.NatGatewayId); err != nil {
 			return false, err
 		} else {
@@ -1209,7 +1236,7 @@ func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NA
 }
 
 func (c *Client) GetNATGateway(ctx context.Context, id string) (*NATGateway, error) {
-	input := &ec2.DescribeNatGatewaysInput{NatGatewayIds: []*string{aws.String(id)}}
+	input := &ec2.DescribeNatGatewaysInput{NatGatewayIds: aws.StringSlice([]string{id})}
 	output, err := c.describeNATGateways(ctx, input)
 	return single(output, err)
 }
@@ -1257,7 +1284,7 @@ func (c *Client) ImportKeyPair(ctx context.Context, keyName string, publicKey []
 }
 
 func (c *Client) GetKeyPair(ctx context.Context, keyName string) (*KeyPairInfo, error) {
-	input := &ec2.DescribeKeyPairsInput{KeyNames: []*string{aws.String(keyName)}}
+	input := &ec2.DescribeKeyPairsInput{KeyNames: aws.StringSlice([]string{keyName})}
 	output, err := c.describeKeyPairs(ctx, input)
 	return single(output, err)
 }
@@ -1349,7 +1376,7 @@ func (c *Client) CreateIAMInstanceProfile(ctx context.Context, profile *IAMInsta
 		return nil, err
 	}
 	profileName := aws.StringValue(output.InstanceProfile.InstanceProfileName)
-	if err = c.Wait(ctx, func(ctx context.Context) (done bool, err error) {
+	if err = c.PollImmediateUntil(ctx, func(ctx context.Context) (done bool, err error) {
 		if item, err := c.GetIAMInstanceProfile(ctx, profileName); err != nil {
 			return false, err
 		} else {
@@ -1451,7 +1478,7 @@ func (c *Client) DeleteEC2Tags(ctx context.Context, resources []string, tags Tag
 	return err
 }
 
-func (c *Client) Wait(ctx context.Context, condition wait.ConditionWithContextFunc) error {
+func (c *Client) PollImmediateUntil(ctx context.Context, condition wait.ConditionWithContextFunc) error {
 	return wait.PollImmediateUntilWithContext(ctx, c.PollInterval, condition)
 }
 

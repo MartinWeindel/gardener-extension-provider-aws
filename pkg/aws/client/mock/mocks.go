@@ -666,6 +666,21 @@ func (mr *MockInterfaceMockRecorder) FindElasticIPsByTags(arg0, arg1 interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindElasticIPsByTags", reflect.TypeOf((*MockInterface)(nil).FindElasticIPsByTags), arg0, arg1)
 }
 
+// FindInternetGatewayByVPC mocks base method.
+func (m *MockInterface) FindInternetGatewayByVPC(arg0 context.Context, arg1 string) (*client.InternetGateway, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindInternetGatewayByVPC", arg0, arg1)
+	ret0, _ := ret[0].(*client.InternetGateway)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindInternetGatewayByVPC indicates an expected call of FindInternetGatewayByVPC.
+func (mr *MockInterfaceMockRecorder) FindInternetGatewayByVPC(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindInternetGatewayByVPC", reflect.TypeOf((*MockInterface)(nil).FindInternetGatewayByVPC), arg0, arg1)
+}
+
 // FindInternetGatewaysByTags mocks base method.
 func (m *MockInterface) FindInternetGatewaysByTags(arg0 context.Context, arg1 client.Tags) ([]*client.InternetGateway, error) {
 	m.ctrl.T.Helper()

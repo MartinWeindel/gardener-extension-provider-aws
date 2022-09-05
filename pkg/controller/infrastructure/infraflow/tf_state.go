@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	ModeManaged    = "managed"
-	AttributeKeyId = "id"
+	ModeManaged      = "managed"
+	AttributeKeyId   = "id"
+	AttributeKeyName = "name"
 )
 
 type TerraformState struct {
@@ -95,10 +96,18 @@ func (ts *TerraformState) FindManagedResourcesByType(tfType string) []*TFResourc
 	return result
 }
 
-func (ts *TerraformState) GetManagedResourceInstanceID(tfType, name string) *string {
-	instances := ts.FindManagedResourceInstances(tfType, name)
+func (ts *TerraformState) GetManagedResourceInstanceID(tfType, resourceName string) *string {
+	return ts.GetManagedResourceInstanceAttribute(tfType, resourceName, AttributeKeyId)
+}
+
+func (ts *TerraformState) GetManagedResourceInstanceName(tfType, resourceName string) *string {
+	return ts.GetManagedResourceInstanceAttribute(tfType, resourceName, AttributeKeyName)
+}
+
+func (ts *TerraformState) GetManagedResourceInstanceAttribute(tfType, resourceName, attributeKey string) *string {
+	instances := ts.FindManagedResourceInstances(tfType, resourceName)
 	if instances != nil && len(instances) == 1 {
-		if value, ok := AttributeAsString(instances[0].Attributes, AttributeKeyId); ok {
+		if value, ok := AttributeAsString(instances[0].Attributes, attributeKey); ok {
 			return &value
 		}
 	}

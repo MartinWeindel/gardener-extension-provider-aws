@@ -28,7 +28,9 @@ import (
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	"github.com/gardener/gardener/pkg/utils/flow"
 	"github.com/go-logr/logr"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -55,11 +57,10 @@ const (
 	IdentifierZoneSubnetPublicRouteTableAssoc  = "SubnetPublicRouteTableAssoc"
 	IdentifierZoneSubnetPrivateRouteTableAssoc = "SubnetPrivateRouteTableAssoc"
 	IdentifierZoneSubnetWorkersRouteTableAssoc = "SubnetWorkersRouteTableAssoc"
-	IdentifierIAMRole                          = "IAMRole"
-	IdentifierIAMInstanceProfile               = "IAMInstanceProfile"
-	IdentifierIAMRolePolicy                    = "IAMRolePolicy"
-	NameKeyPair                                = "KeyPair"
+	NameIAMRole                                = "IAMRoleName"
 	NameIAMInstanceProfile                     = "IAMInstanceProfileName"
+	NameIAMRolePolicy                          = "IAMRolePolicyName"
+	NameKeyPair                                = "KeyPair"
 	ARNIAMRole                                 = "IAMRoleARN"
 
 	ChildIdVPCEndpoints = "VPCEndpoints"
@@ -69,13 +70,14 @@ const (
 	ObjectZoneRouteTable = "ZoneRouteTable"
 
 	MarkerMigratedFromTerraform                   = "MigratedFromTerraform"
+	MarkerTerraformCleanedUp                      = "TerraformCleanedUp"
 	MarkerLoadBalancersAndSecurityGroupsDestroyed = "LoadBalancersAndSecurityGroupsDestroyed"
 )
 
 type FlowContext struct {
 	infra      *extensionsv1alpha1.Infrastructure
 	config     *awsapi.InfrastructureConfig
-	logger     logr.Logger
+	log        logr.Logger
 	client     awsclient.Interface
 	updater    awsclient.Updater
 	commonTags awsclient.Tags
@@ -94,7 +96,7 @@ func NewFlowContext(logger logr.Logger, awsClient awsclient.Interface,
 	rc := &FlowContext{
 		infra:              infra,
 		config:             config,
-		logger:             logger,
+		log:                logger,
 		client:             awsClient,
 		updater:            awsclient.NewUpdater(awsClient, config.IgnoreTags),
 		state:              state.NewWhiteboard(),
@@ -118,6 +120,49 @@ func NewFlowContext(logger logr.Logger, awsClient awsclient.Interface,
 
 func (c *FlowContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
 	return c.config
+}
+
+func (c *FlowContext) hasVPC() bool {
+	return c.state.Has(IdentifierVPC)
+}
+
+func (c *FlowContext) logFromContext(ctx context.Context) logr.Logger {
+	if log, err := logr.FromContext(ctx); err != nil {
+		return c.log
+	} else {
+		return log
+	}
+}
+
+func (c *FlowContext) addTask(g *flow.Graph, name string, fn flow.TaskFn, dependencies ...flow.TaskIDer) flow.TaskIDer {
+	task := flow.Task{
+		Name: name,
+		Fn:   c.wrapTaskFn(g.Name(), name, fn),
+	}
+
+	if len(dependencies) > 0 {
+		task.Dependencies = flow.NewTaskIDs(dependencies...)
+	}
+
+	return g.Add(task)
+}
+
+func (c *FlowContext) wrapTaskFn(flowName, taskName string, fn flow.TaskFn) flow.TaskFn {
+	return func(ctx context.Context) error {
+		taskCtx := logf.IntoContext(ctx, c.log.WithValues("flow", flowName, "task", taskName))
+		err := fn(taskCtx)
+		if err != nil {
+			err = fmt.Errorf("failed to %s: %w", taskName, err)
+		}
+		if perr := c.PersistState(taskCtx, false); perr != nil {
+			if err != nil {
+				c.log.Error(perr, "persisting state failed")
+			} else {
+				err = perr
+			}
+		}
+		return err
+	}
 }
 
 func (c *FlowContext) commonTagsWithSuffix(suffix string) awsclient.Tags {

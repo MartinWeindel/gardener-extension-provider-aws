@@ -82,6 +82,7 @@ type Interface interface {
 	CreateInternetGateway(ctx context.Context, gateway *InternetGateway) (*InternetGateway, error)
 	GetInternetGateway(ctx context.Context, id string) (*InternetGateway, error)
 	FindInternetGatewaysByTags(ctx context.Context, tags Tags) ([]*InternetGateway, error)
+	FindInternetGatewayByVPC(ctx context.Context, vpcId string) (*InternetGateway, error)
 	DeleteInternetGateway(ctx context.Context, id string) error
 	AttachInternetGateway(ctx context.Context, vpcId, internetGatewayId string) error
 	DetachInternetGateway(ctx context.Context, vpcId, internetGatewayId string) error

@@ -38,8 +38,19 @@ import (
 )
 
 func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
+	flowState, err := a.getStateFromProviderStatus(ctx, infrastructure)
+	if err != nil {
+		return err
+	}
+	if flowState != nil {
+		return a.reconcileWithFlow(ctx, log, infrastructure, cluster, flowState)
+	}
 	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
-		return a.reconcileWithFlow(ctx, log, infrastructure, cluster)
+		flowState, err = a.migrateFromTerraformerState(ctx, log, infrastructure)
+		if err != nil {
+			return err
+		}
+		return a.reconcileWithFlow(ctx, log, infrastructure, cluster, flowState)
 	}
 
 	infrastructureStatus, state, err := ReconcileWithTerraform(
@@ -57,12 +68,61 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
 }
 
-func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
-	infrastructure *extensionsv1alpha1.Infrastructure) (*infraflow.FlowContext, error) {
-	var err error
+func (a *actuator) getStateFromProviderStatus(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure) (flowState *awsapi.FlowState, err error) {
+	if infrastructure.Status.ProviderStatus != nil {
+		infraStatus := &awsapi.InfrastructureStatus{}
+		if _, _, err = a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
+			return
+		}
+		flowState = infraStatus.FlowState
+	}
+	return flowState, nil
+}
+
+func (a *actuator) migrateFromTerraformerState(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure) (*awsapi.FlowState, error) {
+	log.Info("starting terraform state migration")
+	infrastructureConfig, err := a.decodeInfrastructureConfig(infrastructure)
+	if err != nil {
+		return nil, err
+	}
+	flowState, err := infraflow.MigrateTerraformStateToFlowState(infrastructure.Status.State, infrastructureConfig.Networks.Zones)
+	if err != nil {
+		return nil, fmt.Errorf("migration from terraform state failed: %w", err)
+	}
+
+	newFlowState := &awsv1alpha1.FlowState{
+		Version: flowState.Version,
+		Data:    flowState.Data,
+	}
+	if err := a.updateProviderStatusFromFlowState(ctx, infrastructure, newFlowState); err != nil {
+		return nil, fmt.Errorf("")
+	}
+	log.Info("terraform state migrated successfully")
+
+	return flowState, nil
+}
+
+func (a *actuator) decodeInfrastructureConfig(infrastructure *extensionsv1alpha1.Infrastructure) (*awsapi.InfrastructureConfig, error) {
 	infrastructureConfig := &awsapi.InfrastructureConfig{}
-	if _, _, err = a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
+	if _, _, err := a.Decoder().Decode(infrastructure.Spec.ProviderConfig.Raw, nil, infrastructureConfig); err != nil {
 		return nil, fmt.Errorf("could not decode provider config: %w", err)
+	}
+	return infrastructureConfig, nil
+}
+
+func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
+	infrastructure *extensionsv1alpha1.Infrastructure, oldFlowState *awsapi.FlowState) (*infraflow.FlowContext, error) {
+	if oldFlowState.Data[infraflow.MarkerMigratedFromTerraform] == "true" && oldFlowState.Data[infraflow.MarkerTerraformCleanedUp] == "" {
+		err := a.cleanupTerraformerResources(ctx, log, infrastructure)
+		if err != nil {
+			return nil, fmt.Errorf("cleaning up terraformer resources failed: %w", err)
+		}
+		oldFlowState.Data[infraflow.MarkerTerraformCleanedUp] = "true"
+	}
+
+	infrastructureConfig, err := a.decodeInfrastructureConfig(infrastructure)
+	if err != nil {
+		return nil, err
 	}
 
 	awsClient, err := aws.NewClientFromSecretRef(ctx, a.Client(), infrastructure.Spec.SecretRef, infrastructure.Spec.Region)
@@ -70,44 +130,29 @@ func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
 		return nil, fmt.Errorf("failed to create new AWS client: %w", err)
 	}
 
-	var oldFlowState *awsapi.FlowState
-	if infrastructure.Status.ProviderStatus != nil {
-		infraStatus := &awsapi.InfrastructureStatus{}
-		if _, _, err = a.Decoder().Decode(infrastructure.Status.ProviderStatus.Raw, nil, infraStatus); err != nil {
-			return nil, fmt.Errorf("could not decode provider status: %w", err)
-		}
-		oldFlowState = infraStatus.FlowState
-	}
-
-	migrated := false
-	if oldFlowState == nil {
-		oldFlowState, err = infraflow.MigrateTerraformStateToFlowState(infrastructure.Status.State)
-		if err != nil {
-			return nil, fmt.Errorf("migration from terraform state failed: %w", err)
-		}
-		migrated = true
-	}
-
 	persistor := func(ctx context.Context, flowState *awsv1alpha1.FlowState) error {
-		return a.updateProviderStatusFromFlowState(ctx, infrastructure, infrastructureConfig, flowState)
+		return a.updateProviderStatusFromFlowState(ctx, infrastructure, flowState)
 	}
-	rctx, err := infraflow.NewFlowContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, persistor)
-	if err != nil {
-		return nil, err
-	}
-	if migrated {
-		if err = rctx.PersistState(ctx, true); err != nil {
-			return nil, err
-		}
-	}
-
-	return rctx, nil
+	return infraflow.NewFlowContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, persistor)
 }
 
-func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
+func (a *actuator) cleanupTerraformerResources(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure) error {
+	tf, err := newTerraformer(log, a.RESTConfig(), aws.TerraformerPurposeInfra, infrastructure, a.disableProjectedTokenMount)
+	if err != nil {
+		return fmt.Errorf("could not create terraformer object: %w", err)
+	}
+
+	if err := tf.CleanupConfiguration(ctx); err != nil {
+		return err
+	}
+	return tf.RemoveTerraformerFinalizerFromConfig(ctx)
+}
+
+func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure,
+	_ *extensionscontroller.Cluster, oldFlowState *awsapi.FlowState) error {
 	log.Info("reconcileWithFlow")
 
-	flowContext, err := a.createFlowContext(ctx, log, infrastructure)
+	flowContext, err := a.createFlowContext(ctx, log, infrastructure, oldFlowState)
 	if err != nil {
 		return err
 	}
@@ -118,20 +163,15 @@ func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infra
 	return flowContext.PersistState(ctx, true)
 }
 
-func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure,
-	infrastructureConfig *awsapi.InfrastructureConfig, flowState *awsv1alpha1.FlowState) error {
-	tfRawState, err := infraflow.GetTerraformerRawState(infrastructure.Status.State)
+func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure, flowState *awsv1alpha1.FlowState) error {
+	infrastructureStatus, err := computeProviderStatusFromFlowState(flowState)
 	if err != nil {
 		return err
 	}
-	infrastructureStatus, err := computeProviderStatusFromFlowState(flowState, infrastructureConfig)
-	if err != nil {
-		return err
-	}
-	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, tfRawState)
+	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, nil)
 }
 
-func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState, infrastructureConfig *awsapi.InfrastructureConfig) (*awsv1alpha1.InfrastructureStatus, error) {
+func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv1alpha1.InfrastructureStatus, error) {
 	var subnets []awsv1alpha1.Subnet
 	prefix := infraflow.ChildIdZones + state.Separator
 	for k, v := range flowState.Data {

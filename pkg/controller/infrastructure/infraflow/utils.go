@@ -19,9 +19,11 @@ package infraflow
 
 import (
 	"context"
+	"time"
 
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	"github.com/go-logr/logr"
 )
 
 type zoneDependencies map[string][]flow.TaskIDer
@@ -107,4 +109,46 @@ func findExisting[T any](ctx context.Context, id *string, tags awsclient.Tags,
 		return nil, nil
 	}
 	return found[0], nil
+}
+
+type waiter struct {
+	log           logr.Logger
+	period        time.Duration
+	message       string
+	keysAndValues []any
+	done          chan struct{}
+}
+
+func informOnWaiting(log logr.Logger, period time.Duration, message string, keysAndValues ...any) *waiter {
+	w := &waiter{
+		log:           log,
+		period:        period,
+		message:       message,
+		keysAndValues: keysAndValues,
+		done:          make(chan struct{}),
+	}
+	go w.run()
+	return w
+}
+
+func (w *waiter) run() {
+	ticker := time.NewTicker(w.period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.done:
+			return
+		case <-ticker.C:
+			w.log.Info(w.message, w.keysAndValues...)
+		}
+	}
+}
+
+func (w *waiter) Done(err error) {
+	w.done <- struct{}{}
+	if err != nil {
+		w.log.Info("failed: " + err.Error())
+	} else {
+		w.log.Info("succeeded")
+	}
 }

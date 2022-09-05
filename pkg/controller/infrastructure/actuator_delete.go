@@ -37,16 +37,29 @@ import (
 )
 
 func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
-	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
-		return a.deleteWithFlow(ctx, log, infrastructure, cluster)
+	flowState, err := a.getStateFromProviderStatus(ctx, infrastructure)
+	if err != nil {
+		return err
 	}
+	if flowState != nil {
+		return a.deleteWithFlow(ctx, log, infrastructure, cluster, flowState)
+	}
+	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
+		flowState, err = a.migrateFromTerraformerState(ctx, log, infrastructure)
+		if err != nil {
+			return err
+		}
+		return a.deleteWithFlow(ctx, log, infrastructure, cluster, flowState)
+	}
+
 	return Delete(ctx, log, a.RESTConfig(), a.Client(), a.Decoder(), infrastructure, a.disableProjectedTokenMount)
 }
 
-func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, _ *extensionscontroller.Cluster) error {
+func (a *actuator) deleteWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure,
+	_ *extensionscontroller.Cluster, oldFlowState *awsapi.FlowState) error {
 	log.Info("deleteWithFlow")
 
-	flowContext, err := a.createFlowContext(ctx, log, infrastructure)
+	flowContext, err := a.createFlowContext(ctx, log, infrastructure, oldFlowState)
 	if err != nil {
 		return err
 	}

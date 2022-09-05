@@ -32,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/gardener/gardener-extension-provider-aws/test/integration"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/extensions"
 	"github.com/gardener/gardener/pkg/logger"
@@ -58,6 +59,14 @@ import (
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	. "github.com/gardener/gardener-extension-provider-aws/pkg/aws/matchers"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure"
+)
+
+type flowUsage int
+
+const (
+	fuUseTerraformer flowUsage = iota
+	fuMigrateFromTerraformer
+	fuUseFlow
 )
 
 const (
@@ -185,76 +194,129 @@ var _ = BeforeSuite(func() {
 
 var _ = Describe("Infrastructure tests", func() {
 	Context("with infrastructure that requests new vpc (networks.vpc.cidr)", func() {
-		It("should successfully create and delete", func() {
+		/*
+				It("should successfully create and delete (flow)", func() {
+					providerConfig := newProviderConfig(awsv1alpha1.VPC{
+						CIDR:             pointer.StringPtr(vpcCIDR),
+						GatewayEndpoints: []string{s3GatewayEndpoint},
+					})
+
+					namespace, err := generateNamespaceName()
+					Expect(err).NotTo(HaveOccurred())
+
+					err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient, fuUseFlow)
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
+				Context("with infrastructure that requests new vpc (networks.vpc.cidr)", func() {
+					It("should successfully create and delete (terraformer)", func() {
+						providerConfig := newProviderConfig(awsv1alpha1.VPC{
+							CIDR:             pointer.StringPtr(vpcCIDR),
+							GatewayEndpoints: []string{s3GatewayEndpoint},
+						})
+
+						namespace, err := generateNamespaceName()
+						Expect(err).NotTo(HaveOccurred())
+
+						err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient, fuUseTerraformer)
+						Expect(err).NotTo(HaveOccurred())
+					})
+				})
+				Context("with infrastructure that requests new vpc (networks.vpc.cidr)", func() {
+					It("should successfully create and delete (migration from terraformer)", func() {
+						providerConfig := newProviderConfig(awsv1alpha1.VPC{
+							CIDR:             pointer.StringPtr(vpcCIDR),
+							GatewayEndpoints: []string{s3GatewayEndpoint},
+						})
+
+						namespace, err := generateNamespaceName()
+						Expect(err).NotTo(HaveOccurred())
+
+						err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient, fuMigrateFromTerraformer)
+						Expect(err).NotTo(HaveOccurred())
+
+					})
+				})
+
+			Context("with infrastructure that uses existing vpc (networks.vpc.id)", func() {
+				It("should fail to create when required vpc attribute is not enabled", func() {
+					enableDnsHostnames := false
+					vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(vpcID).NotTo(BeEmpty())
+					Expect(igwID).NotTo(BeEmpty())
+
+					framework.AddCleanupAction(func() {
+						Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
+					})
+
+					providerConfig := newProviderConfig(awsv1alpha1.VPC{
+						ID:               &vpcID,
+						GatewayEndpoints: []string{s3GatewayEndpoint},
+					})
+
+					namespace, err := generateNamespaceName()
+					Expect(err).NotTo(HaveOccurred())
+
+					err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient, fuUseFlow)
+					Expect(err).To(HaveOccurred())
+
+					By("verify infrastructure status")
+					infra := &extensionsv1alpha1.Infrastructure{}
+					err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "infrastructure"}, infra)
+					Expect(err).NotTo(HaveOccurred())
+
+					Expect(infra.Status.LastError).NotTo(BeNil())
+					Expect(infra.Status.LastError.Description).To(ContainSubstring("VPC attribute enableDnsHostnames must be set to true"))
+				})
+
+				It("should successfully create and delete (terraformer)", func() {
+					enableDnsHostnames := true
+					vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(vpcID).NotTo(BeEmpty())
+					Expect(igwID).NotTo(BeEmpty())
+
+					framework.AddCleanupAction(func() {
+						Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
+					})
+
+					providerConfig := newProviderConfig(awsv1alpha1.VPC{
+						ID:               &vpcID,
+						GatewayEndpoints: []string{s3GatewayEndpoint},
+					})
+
+					namespace, err := generateNamespaceName()
+					Expect(err).NotTo(HaveOccurred())
+
+					err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient, fuUseTerraformer)
+					Expect(err).NotTo(HaveOccurred())
+				})*/
+
+		It("should successfully create and delete (flow)", func() {
+			enableDnsHostnames := true
+			vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vpcID).NotTo(BeEmpty())
+			Expect(igwID).NotTo(BeEmpty())
+
+			framework.AddCleanupAction(func() {
+				Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
+			})
+
 			providerConfig := newProviderConfig(awsv1alpha1.VPC{
-				CIDR:             pointer.StringPtr(vpcCIDR),
+				ID:               &vpcID,
 				GatewayEndpoints: []string{s3GatewayEndpoint},
 			})
 
 			namespace, err := generateNamespaceName()
 			Expect(err).NotTo(HaveOccurred())
 
-			err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
+			err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient, fuUseFlow)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 	/*
-		Context("with infrastructure that uses existing vpc (networks.vpc.id)", func() {
-			It("should fail to create when required vpc attribute is not enabled", func() {
-				enableDnsHostnames := false
-				vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(vpcID).NotTo(BeEmpty())
-				Expect(igwID).NotTo(BeEmpty())
-
-				framework.AddCleanupAction(func() {
-					Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
-				})
-
-				providerConfig := newProviderConfig(awsv1alpha1.VPC{
-					ID:               &vpcID,
-					GatewayEndpoints: []string{s3GatewayEndpoint},
-				})
-
-				namespace, err := generateNamespaceName()
-				Expect(err).NotTo(HaveOccurred())
-
-				err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
-				Expect(err).To(HaveOccurred())
-
-				By("verify infrastructure status")
-				infra := &extensionsv1alpha1.Infrastructure{}
-				err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "infrastructure"}, infra)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(infra.Status.LastError).NotTo(BeNil())
-				Expect(infra.Status.LastError.Description).To(ContainSubstring("VPC attribute enableDnsHostnames must be set to true"))
-			})
-
-			It("should successfully create and delete", func() {
-				enableDnsHostnames := true
-				vpcID, igwID, err := integration.CreateVPC(ctx, log, awsClient, vpcCIDR, enableDnsHostnames)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(vpcID).NotTo(BeEmpty())
-				Expect(igwID).NotTo(BeEmpty())
-
-				framework.AddCleanupAction(func() {
-					Expect(integration.DestroyVPC(ctx, log, awsClient, vpcID)).To(Succeed())
-				})
-
-				providerConfig := newProviderConfig(awsv1alpha1.VPC{
-					ID:               &vpcID,
-					GatewayEndpoints: []string{s3GatewayEndpoint},
-				})
-
-				namespace, err := generateNamespaceName()
-				Expect(err).NotTo(HaveOccurred())
-
-				err = runTest(ctx, log, c, namespace, providerConfig, decoder, awsClient)
-				Expect(err).NotTo(HaveOccurred())
-			})
-		})
-
 		Context("with invalid credentials", func() {
 			It("should fail creation but succeed deletion", func() {
 				providerConfig := newProviderConfig(awsv1alpha1.VPC{
@@ -355,7 +417,8 @@ var _ = Describe("Infrastructure tests", func() {
 	*/
 })
 
-func runTest(ctx context.Context, log logr.Logger, c client.Client, namespaceName string, providerConfig *awsv1alpha1.InfrastructureConfig, decoder runtime.Decoder, awsClient *awsclient.Client) error {
+func runTest(ctx context.Context, log logr.Logger, c client.Client, namespaceName string,
+	providerConfig *awsv1alpha1.InfrastructureConfig, decoder runtime.Decoder, awsClient *awsclient.Client, flow flowUsage) error {
 	var (
 		namespace                 *corev1.Namespace
 		cluster                   *extensionsv1alpha1.Cluster
@@ -427,7 +490,7 @@ func runTest(ctx context.Context, log logr.Logger, c client.Client, namespaceNam
 	}
 
 	By("create infrastructure")
-	infra, err := newInfrastructure(namespaceName, providerConfig, true)
+	infra, err := newInfrastructure(namespaceName, providerConfig, flow == fuUseFlow)
 	if err != nil {
 		return err
 	}
@@ -472,6 +535,9 @@ func runTest(ctx context.Context, log logr.Logger, c client.Client, namespaceNam
 	By("triggering infrastructure reconciliation")
 	infraCopy := infra.DeepCopy()
 	metav1.SetMetaDataAnnotation(&infra.ObjectMeta, "gardener.cloud/operation", "reconcile")
+	if flow == fuMigrateFromTerraformer {
+		metav1.SetMetaDataAnnotation(&infra.ObjectMeta, infrastructure.AnnotationKeyUseFlow, "true")
+	}
 	Expect(c.Patch(ctx, infra, client.MergeFrom(infraCopy))).To(Succeed())
 
 	By("wait until infrastructure is reconciled")
