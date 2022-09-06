@@ -1222,23 +1222,27 @@ func (c *Client) CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NA
 	if err != nil {
 		return nil, err
 	}
-	if err = c.PollImmediateUntil(ctx, func(ctx context.Context) (done bool, err error) {
-		if item, err := c.GetNATGateway(ctx, *output.NatGateway.NatGatewayId); err != nil {
+	return fromNatGateway(output.NatGateway), nil
+}
+
+func (c *Client) WaitForNATGatewayAvailable(ctx context.Context, id string) error {
+	return c.PollImmediateUntil(ctx, func(ctx context.Context) (done bool, err error) {
+		if item, err := c.GetNATGateway(ctx, id); err != nil {
 			return false, err
 		} else {
-			return item.State == ec2.StateAvailable, nil
+			return strings.EqualFold(item.State, ec2.StateAvailable), nil
 		}
-	}); err != nil {
-		return nil, err
-	}
-
-	return fromNatGateway(output.NatGateway), nil
+	})
 }
 
 func (c *Client) GetNATGateway(ctx context.Context, id string) (*NATGateway, error) {
 	input := &ec2.DescribeNatGatewaysInput{NatGatewayIds: aws.StringSlice([]string{id})}
 	output, err := c.describeNATGateways(ctx, input)
-	return single(output, err)
+	gw, err := single(output, err)
+	if gw != nil && strings.EqualFold(gw.State, ec2.StateDeleted) {
+		return nil, nil
+	}
+	return gw, err
 }
 
 func (c *Client) FindNATGatewaysByTags(ctx context.Context, tags Tags) ([]*NATGateway, error) {
@@ -1253,7 +1257,10 @@ func (c *Client) describeNATGateways(ctx context.Context, input *ec2.DescribeNat
 	}
 	var gateways []*NATGateway
 	for _, item := range output.NatGateways {
-		gateways = append(gateways, fromNatGateway(item))
+		gw := fromNatGateway(item)
+		if gw != nil {
+			gateways = append(gateways, gw)
+		}
 	}
 	return gateways, nil
 }
@@ -1263,6 +1270,16 @@ func (c *Client) DeleteNATGateway(ctx context.Context, id string) error {
 		NatGatewayId: aws.String(id),
 	}
 	_, err := c.EC2.DeleteNatGatewayWithContext(ctx, input)
+	if err != nil {
+		return ignoreNotFound(err)
+	}
+	err = c.PollUntil(ctx, func(ctx context.Context) (done bool, err error) {
+		if item, err := c.GetNATGateway(ctx, id); err != nil {
+			return false, err
+		} else {
+			return item == nil, nil
+		}
+	})
 	return ignoreNotFound(err)
 }
 
@@ -1482,10 +1499,14 @@ func (c *Client) PollImmediateUntil(ctx context.Context, condition wait.Conditio
 	return wait.PollImmediateUntilWithContext(ctx, c.PollInterval, condition)
 }
 
+func (c *Client) PollUntil(ctx context.Context, condition wait.ConditionWithContextFunc) error {
+	return wait.PollUntilWithContext(ctx, c.PollInterval, condition)
+}
+
 // IsNotFoundError returns true if the given error is a awserr.Error indicating that an AWS resource was not found.
 func IsNotFoundError(err error) bool {
 	if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == elb.ErrCodeAccessPointNotFoundException ||
-		aerr.Code() == iam.ErrCodeNoSuchEntityException ||
+		aerr.Code() == iam.ErrCodeNoSuchEntityException || aerr.Code() == "NatGatewayNotFound" ||
 		strings.HasSuffix(aerr.Code(), ".NotFound")) {
 		return true
 	}
@@ -1600,7 +1621,7 @@ func fromAddress(item *ec2.Address) *ElasticIP {
 }
 
 func fromNatGateway(item *ec2.NatGateway) *NATGateway {
-	if aws.StringValue(item.State) == ec2.StateDeleted || aws.StringValue(item.State) == ec2.StateDeleting {
+	if strings.EqualFold(aws.StringValue(item.State), ec2.StateDeleted) {
 		return nil
 	}
 	var allocationId, publicIP string

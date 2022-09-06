@@ -30,6 +30,7 @@ import (
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	"github.com/go-logr/logr"
+	"k8s.io/utils/pointer"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -134,14 +135,61 @@ func (c *FlowContext) logFromContext(ctx context.Context) logr.Logger {
 	}
 }
 
-func (c *FlowContext) addTask(g *flow.Graph, name string, fn flow.TaskFn, dependencies ...flow.TaskIDer) flow.TaskIDer {
-	task := flow.Task{
-		Name: name,
-		Fn:   c.wrapTaskFn(g.Name(), name, fn),
+type TaskOption struct {
+	Dependencies []flow.TaskIDer
+	Timeout      time.Duration
+	DoIf         *bool
+}
+
+func Dependencies(dependencies ...flow.TaskIDer) TaskOption {
+	return TaskOption{Dependencies: dependencies}
+}
+
+func Timeout(timeout time.Duration) TaskOption {
+	return TaskOption{Timeout: timeout}
+}
+
+func DoIf(condition bool) TaskOption {
+	return TaskOption{DoIf: pointer.Bool(condition)}
+}
+
+func (c *FlowContext) addTask(g *flow.Graph, name string, fn flow.TaskFn, options ...TaskOption) flow.TaskIDer {
+
+	allOptions := TaskOption{}
+	for _, opt := range options {
+		if len(opt.Dependencies) > 0 {
+			allOptions.Dependencies = append(allOptions.Dependencies, opt.Dependencies...)
+		}
+		if opt.Timeout > 0 {
+			allOptions.Timeout = opt.Timeout
+		}
+		if opt.DoIf != nil {
+			condition := true
+			if allOptions.DoIf != nil {
+				condition = *allOptions.DoIf
+			}
+			condition = condition && *opt.DoIf
+			allOptions.DoIf = pointer.Bool(condition)
+		}
 	}
 
-	if len(dependencies) > 0 {
-		task.Dependencies = flow.NewTaskIDs(dependencies...)
+	tunedFn := fn
+	if allOptions.DoIf != nil {
+		tunedFn = tunedFn.DoIf(*allOptions.DoIf)
+		if !*allOptions.DoIf {
+			name = "[Skipped] " + name
+		}
+	}
+	if allOptions.Timeout > 0 {
+		tunedFn = tunedFn.Timeout(allOptions.Timeout)
+	}
+	task := flow.Task{
+		Name: name,
+		Fn:   c.wrapTaskFn(g.Name(), name, tunedFn),
+	}
+
+	if len(allOptions.Dependencies) > 0 {
+		task.Dependencies = flow.NewTaskIDs(allOptions.Dependencies...)
 	}
 
 	return g.Add(task)
@@ -152,7 +200,8 @@ func (c *FlowContext) wrapTaskFn(flowName, taskName string, fn flow.TaskFn) flow
 		taskCtx := logf.IntoContext(ctx, c.log.WithValues("flow", flowName, "task", taskName))
 		err := fn(taskCtx)
 		if err != nil {
-			err = fmt.Errorf("failed to %s: %w", taskName, err)
+			// don't wrap error with '%w', as otherwise the error context get lost
+			err = fmt.Errorf("failed to %s: %s", taskName, err)
 		}
 		if perr := c.PersistState(taskCtx, false); perr != nil {
 			if err != nil {

@@ -1217,6 +1217,20 @@ func (mr *MockInterfaceMockRecorder) UpdateVpcAttribute(arg0, arg1, arg2, arg3 i
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateVpcAttribute", reflect.TypeOf((*MockInterface)(nil).UpdateVpcAttribute), arg0, arg1, arg2, arg3)
 }
 
+// WaitForNATGatewayAvailable mocks base method.
+func (m *MockInterface) WaitForNATGatewayAvailable(arg0 context.Context, arg1 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WaitForNATGatewayAvailable", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// WaitForNATGatewayAvailable indicates an expected call of WaitForNATGatewayAvailable.
+func (mr *MockInterfaceMockRecorder) WaitForNATGatewayAvailable(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitForNATGatewayAvailable", reflect.TypeOf((*MockInterface)(nil).WaitForNATGatewayAvailable), arg0, arg1)
+}
+
 // MockFactory is a mock of Factory interface.
 type MockFactory struct {
 	ctrl     *gomock.Controller

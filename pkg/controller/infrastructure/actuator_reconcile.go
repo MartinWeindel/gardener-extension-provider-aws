@@ -45,7 +45,7 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 	if flowState != nil {
 		return a.reconcileWithFlow(ctx, log, infrastructure, cluster, flowState)
 	}
-	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
+	if a.shouldUseFlow(infrastructure, cluster) {
 		flowState, err = a.migrateFromTerraformerState(ctx, log, infrastructure)
 		if err != nil {
 			return err
@@ -66,6 +66,11 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 		return err
 	}
 	return updateProviderStatus(ctx, a.Client(), infrastructure, infrastructureStatus, state)
+}
+
+func (a *actuator) shouldUseFlow(infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) bool {
+	return (infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true")) ||
+		(cluster.Shoot != nil && cluster.Shoot.Annotations != nil && strings.EqualFold(cluster.Shoot.Annotations[AnnotationKeyUseFlow], "true"))
 }
 
 func (a *actuator) getStateFromProviderStatus(ctx context.Context, infrastructure *extensionsv1alpha1.Infrastructure) (flowState *awsapi.FlowState, err error) {

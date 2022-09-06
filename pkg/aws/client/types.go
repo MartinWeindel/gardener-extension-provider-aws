@@ -119,6 +119,7 @@ type Interface interface {
 
 	// Internet gateways
 	CreateNATGateway(ctx context.Context, gateway *NATGateway) (*NATGateway, error)
+	WaitForNATGatewayAvailable(ctx context.Context, id string) error
 	GetNATGateway(ctx context.Context, id string) (*NATGateway, error)
 	FindNATGatewaysByTags(ctx context.Context, tags Tags) ([]*NATGateway, error)
 	DeleteNATGateway(ctx context.Context, id string) error

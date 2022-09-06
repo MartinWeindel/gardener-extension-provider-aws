@@ -122,6 +122,8 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 		tfState.GetManagedResourceInstanceName("aws_iam_instance_profile", "nodes"))
 	setFlowStateData(flowState, NameIAMRolePolicy,
 		tfState.GetManagedResourceInstanceName("aws_iam_role_policy", "nodes"))
+	setFlowStateData(flowState, ARNIAMRole,
+		tfState.GetManagedResourceInstanceAttribute("aws_iam_role", "nodes", "arn"))
 
 	setFlowStateData(flowState, NameKeyPair,
 		tfState.GetManagedResourceInstanceAttribute("aws_key_pair", "nodes", "key_pair_id"))

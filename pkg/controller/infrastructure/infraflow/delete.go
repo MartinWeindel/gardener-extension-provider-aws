@@ -42,72 +42,58 @@ func (c *FlowContext) buildDeleteGraph() *flow.Graph {
 	deleteVPC := c.config.Networks.VPC.ID == nil && c.state.Has(IdentifierVPC)
 
 	destroyLoadBalancersAndSecurityGroups := c.addTask(g, "Destroying Kubernetes load balancers and security groups",
-		flow.TaskFn(c.deleteKubernetesLoadBalancersAndSecurityGroups).
-			RetryUntilTimeout(10*time.Second, 5*time.Minute).
-			DoIf(c.hasVPC() && c.state.Get(MarkerLoadBalancersAndSecurityGroupsDestroyed) == nil))
+		c.deleteKubernetesLoadBalancersAndSecurityGroups,
+		DoIf(c.hasVPC() && c.state.Get(MarkerLoadBalancersAndSecurityGroupsDestroyed) == nil), Timeout(5*time.Minute))
 
 	_ = c.addTask(g, "delete key pair",
-		flow.TaskFn(c.deleteKeyPair).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
+		c.deleteKeyPair,
+		Timeout(defaultTimeout))
 
 	deleteIAMInstanceProfile := c.addTask(g, "delete IAM instance profile",
-		flow.TaskFn(c.deleteIAMInstanceProfile).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
+		c.deleteIAMInstanceProfile,
+		Timeout(defaultTimeout))
 
 	deleteIAMRolePolicy := c.addTask(g, "delete IAM role policy",
-		flow.TaskFn(c.deleteIAMRolePolicy).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout))
+		c.deleteIAMRolePolicy,
+		Timeout(defaultTimeout))
 
 	_ = c.addTask(g, "delete IAM role",
-		flow.TaskFn(c.deleteIAMRole).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout),
-		deleteIAMInstanceProfile, deleteIAMRolePolicy)
+		c.deleteIAMRole,
+		Timeout(defaultTimeout), Dependencies(deleteIAMInstanceProfile, deleteIAMRolePolicy))
 
-	deleteSubnets := c.addTask(g, "delete zones resources",
-		flow.TaskFn(c.deleteZones).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(c.hasVPC()))
+	deleteZones := c.addTask(g, "delete zones resources",
+		c.deleteZones,
+		DoIf(c.hasVPC()), Timeout(defaultLongTimeout))
 
 	deleteNodesSecurityGroup := c.addTask(g, "delete nodes security group",
-		flow.TaskFn(c.deleteNodesSecurityGroup).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(c.hasVPC()),
-		deleteSubnets)
+		c.deleteNodesSecurityGroup,
+		DoIf(c.hasVPC()), Timeout(defaultTimeout), Dependencies(deleteZones))
 
 	deleteMainRouteTable := c.addTask(g, "delete main route table",
-		flow.TaskFn(c.deleteMainRouteTable).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(c.hasVPC()),
-		deleteSubnets)
+		c.deleteMainRouteTable,
+		DoIf(c.hasVPC()), Timeout(defaultTimeout), Dependencies(deleteZones))
 
 	deleteGatewayEndpoints := c.addTask(g, "delete gateway endpoints",
-		flow.TaskFn(c.deleteGatewayEndpoints).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(c.hasVPC()))
+		c.deleteGatewayEndpoints,
+		DoIf(c.hasVPC()), Timeout(defaultTimeout))
 
 	deleteInternetGateway := c.addTask(g, "delete internet gateway",
-		flow.TaskFn(c.deleteInternetGateway).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(deleteVPC && c.hasVPC()),
-		deleteGatewayEndpoints, deleteMainRouteTable)
+		c.deleteInternetGateway,
+		DoIf(deleteVPC && c.hasVPC()), Timeout(defaultTimeout), Dependencies(deleteGatewayEndpoints, deleteMainRouteTable))
 
 	deleteDefaultSecurityGroup := c.addTask(g, "delete default security group",
-		flow.TaskFn(c.deleteDefaultSecurityGroup).
-			RetryUntilTimeout(defaultRetryInterval, defaultRetryTimeout).
-			DoIf(deleteVPC && c.hasVPC()),
-		deleteGatewayEndpoints)
+		c.deleteDefaultSecurityGroup,
+		DoIf(deleteVPC && c.hasVPC()), Timeout(defaultTimeout), Dependencies(deleteGatewayEndpoints))
 
 	deleteVpc := c.addTask(g, "delete VPC",
-		flow.TaskFn(c.deleteVpc).
-			RetryUntilTimeout(5*time.Second, 5*time.Minute).
-			DoIf(deleteVPC && c.hasVPC()),
-		deleteInternetGateway, deleteDefaultSecurityGroup, deleteNodesSecurityGroup, destroyLoadBalancersAndSecurityGroups)
+		c.deleteVpc,
+		DoIf(deleteVPC && c.hasVPC()), Timeout(defaultTimeout),
+		Dependencies(deleteInternetGateway, deleteDefaultSecurityGroup, deleteNodesSecurityGroup, destroyLoadBalancersAndSecurityGroups))
 
 	_ = c.addTask(g, "delete DHCP options for VPC",
-		flow.TaskFn(c.deleteDhcpOptions).
-			RetryUntilTimeout(5*time.Second, 5*time.Minute).
-			DoIf(deleteVPC && !c.state.IsAlreadyDeleted(IdentifierDHCPOptions)),
-		deleteVpc)
+		c.deleteDhcpOptions,
+		DoIf(deleteVPC && !c.state.IsAlreadyDeleted(IdentifierDHCPOptions)), Timeout(defaultTimeout),
+		Dependencies(deleteVpc))
 
 	return g
 }

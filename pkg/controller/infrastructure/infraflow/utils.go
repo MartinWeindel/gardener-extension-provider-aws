@@ -19,11 +19,13 @@ package infraflow
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	"github.com/go-logr/logr"
+	"go.uber.org/atomic"
 )
 
 type zoneDependencies map[string][]flow.TaskIDer
@@ -43,13 +45,6 @@ func (d zoneDependencies) Append(zoneName string, taskIDers ...flow.TaskIDer) {
 
 func (d zoneDependencies) Get(zoneName string) []flow.TaskIDer {
 	return d[zoneName]
-}
-
-func copyTaskIDers(array []flow.TaskIDer, more ...flow.TaskIDer) []flow.TaskIDer {
-	var copy []flow.TaskIDer
-	copy = append(copy, array...)
-	copy = append(copy, more...)
-	return copy
 }
 
 func diffByID[T any](desired, current []T, unique func(item T) string) (toBeDeleted, toBeCreated []T, toBeChecked []struct{ desired, current T }) {
@@ -90,7 +85,9 @@ func findExisting[T any](ctx context.Context, id *string, tags awsclient.Tags,
 		if err != nil {
 			return nil, err
 		}
-		return found, nil
+		if found != nil && (len(selector) == 0 || selector[0](found)) {
+			return found, nil
+		}
 	}
 
 	found, err := finder(ctx, tags)
@@ -100,7 +97,7 @@ func findExisting[T any](ctx context.Context, id *string, tags awsclient.Tags,
 	if len(found) == 0 {
 		return nil, nil
 	}
-	if selector != nil {
+	if len(selector) > 0 {
 		for _, item := range found {
 			if selector[0](item) {
 				return item, nil
@@ -113,8 +110,9 @@ func findExisting[T any](ctx context.Context, id *string, tags awsclient.Tags,
 
 type waiter struct {
 	log           logr.Logger
+	start         time.Time
 	period        time.Duration
-	message       string
+	message       atomic.String
 	keysAndValues []any
 	done          chan struct{}
 }
@@ -122,13 +120,18 @@ type waiter struct {
 func informOnWaiting(log logr.Logger, period time.Duration, message string, keysAndValues ...any) *waiter {
 	w := &waiter{
 		log:           log,
+		start:         time.Now(),
 		period:        period,
-		message:       message,
 		keysAndValues: keysAndValues,
 		done:          make(chan struct{}),
 	}
+	w.message.Store(message)
 	go w.run()
 	return w
+}
+
+func (w *waiter) UpdateMessage(message string) {
+	w.message.Store(message)
 }
 
 func (w *waiter) run() {
@@ -139,7 +142,8 @@ func (w *waiter) run() {
 		case <-w.done:
 			return
 		case <-ticker.C:
-			w.log.Info(w.message, w.keysAndValues...)
+			delta := int(time.Now().Sub(w.start).Seconds())
+			w.log.Info(fmt.Sprintf("%s [%ds]", w.message.Load(), delta), w.keysAndValues...)
 		}
 	}
 }
