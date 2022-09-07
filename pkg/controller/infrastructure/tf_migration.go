@@ -15,7 +15,7 @@
  *
  */
 
-package infraflow
+package infrastructure
 
 import (
 	"encoding/base64"
@@ -24,6 +24,7 @@ import (
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,7 +33,7 @@ import (
 func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones []awsapi.Zone) (*awsapi.FlowState, error) {
 	var (
 		tfRawState *terraformer.RawState
-		tfState    *TerraformState
+		tfState    *state.TerraformState
 		err        error
 	)
 
@@ -60,7 +61,7 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 	default:
 		return nil, fmt.Errorf("unknown encoding of Terraformer raw state: %s", tfRawState.Encoding)
 	}
-	if tfState, err = UnmarshalTerraformState(data); err != nil {
+	if tfState, err = state.UnmarshalTerraformState(data); err != nil {
 		return nil, fmt.Errorf("could not decode terraform state: %w", err)
 	}
 
@@ -70,65 +71,65 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 
 	value := tfState.Outputs[aws.VPCIDKey].Value
 	if value != "" {
-		setFlowStateData(flowState, IdentifierVPC, &value)
+		setFlowStateData(flowState, infraflow.IdentifierVPC, &value)
 	}
-	setFlowStateData(flowState, IdentifierDHCPOptions,
+	setFlowStateData(flowState, infraflow.IdentifierDHCPOptions,
 		tfState.GetManagedResourceInstanceID("aws_vpc_dhcp_options", "vpc_dhcp_options"))
-	setFlowStateData(flowState, IdentifierDefaultSecurityGroup,
+	setFlowStateData(flowState, infraflow.IdentifierDefaultSecurityGroup,
 		tfState.GetManagedResourceInstanceID("aws_default_security_group", "default"))
-	setFlowStateData(flowState, IdentifierInternetGateway,
+	setFlowStateData(flowState, infraflow.IdentifierInternetGateway,
 		tfState.GetManagedResourceInstanceID("aws_internet_gateway", "igw"))
-	setFlowStateData(flowState, IdentifierMainRouteTable,
+	setFlowStateData(flowState, infraflow.IdentifierMainRouteTable,
 		tfState.GetManagedResourceInstanceID("aws_route_table", "public"))
-	setFlowStateData(flowState, IdentifierNodesSecurityGroup,
+	setFlowStateData(flowState, infraflow.IdentifierNodesSecurityGroup,
 		tfState.GetManagedResourceInstanceID("aws_security_group", "nodes"))
 
 	if instances := tfState.GetManagedResourceInstances("aws_vpc_endpoint"); len(instances) > 0 {
 		for name, id := range instances {
-			key := ChildIdVPCEndpoints + state.Separator + strings.TrimPrefix(name, "vpc_gwep_")
+			key := infraflow.ChildIdVPCEndpoints + state.Separator + strings.TrimPrefix(name, "vpc_gwep_")
 			setFlowStateData(flowState, key, &id)
 		}
 	}
 
 	tfNamePrefixes := []string{"nodes_", "private_utility_", "public_utility"}
-	flowNames := []string{IdentifierZoneSubnetWorkers, IdentifierZoneSubnetPrivate, IdentifierZoneSubnetPublic}
+	flowNames := []string{infraflow.IdentifierZoneSubnetWorkers, infraflow.IdentifierZoneSubnetPrivate, infraflow.IdentifierZoneSubnetPublic}
 	for i, zone := range zones {
-		keyPrefix := ChildIdZones + state.Separator + zone.Name + state.Separator
+		keyPrefix := infraflow.ChildIdZones + state.Separator + zone.Name + state.Separator
 		suffix := fmt.Sprintf("z%d", i)
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneSuffix, &suffix)
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneSuffix, &suffix)
 
 		for j := 0; j < len(tfNamePrefixes); j++ {
 			setFlowStateData(flowState, keyPrefix+flowNames[j],
 				tfState.GetManagedResourceInstanceID("aws_subnet", tfNamePrefixes[j]+suffix))
 		}
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneNATGWElasticIP,
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneNATGWElasticIP,
 			tfState.GetManagedResourceInstanceID("aws_eip", "eip_natgw_"+suffix))
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneNATGateway,
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneNATGateway,
 			tfState.GetManagedResourceInstanceID("aws_nat_gateway", "natgw_"+suffix))
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneNATGateway,
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneNATGateway,
 			tfState.GetManagedResourceInstanceID("aws_route_table", "private_utility_"+suffix))
 
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneSubnetPublicRouteTableAssoc,
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneSubnetPublicRouteTableAssoc,
 			tfState.GetManagedResourceInstanceID("aws_route_table_association", "routetable_main_association_public_utility_"+suffix))
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneSubnetPrivateRouteTableAssoc,
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneSubnetPrivateRouteTableAssoc,
 			tfState.GetManagedResourceInstanceID("aws_route_table_association", "routetable_private_utility_"+suffix+"_association_private_utility_"+suffix))
-		setFlowStateData(flowState, keyPrefix+IdentifierZoneSubnetWorkersRouteTableAssoc,
+		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneSubnetWorkersRouteTableAssoc,
 			tfState.GetManagedResourceInstanceID("aws_route_table_association", "routetable_private_utility_"+suffix+"_association_nodes_"+suffix))
 	}
 
-	setFlowStateData(flowState, NameIAMRole,
+	setFlowStateData(flowState, infraflow.NameIAMRole,
 		tfState.GetManagedResourceInstanceName("aws_iam_role", "nodes"))
-	setFlowStateData(flowState, NameIAMInstanceProfile,
+	setFlowStateData(flowState, infraflow.NameIAMInstanceProfile,
 		tfState.GetManagedResourceInstanceName("aws_iam_instance_profile", "nodes"))
-	setFlowStateData(flowState, NameIAMRolePolicy,
+	setFlowStateData(flowState, infraflow.NameIAMRolePolicy,
 		tfState.GetManagedResourceInstanceName("aws_iam_role_policy", "nodes"))
-	setFlowStateData(flowState, ARNIAMRole,
+	setFlowStateData(flowState, infraflow.ARNIAMRole,
 		tfState.GetManagedResourceInstanceAttribute("aws_iam_role", "nodes", "arn"))
 
-	setFlowStateData(flowState, NameKeyPair,
+	setFlowStateData(flowState, infraflow.NameKeyPair,
 		tfState.GetManagedResourceInstanceAttribute("aws_key_pair", "nodes", "key_pair_id"))
 
-	flowState.Data[MarkerMigratedFromTerraform] = "true"
+	flowState.Data[infraflow.MarkerMigratedFromTerraform] = "true"
 
 	return flowState, nil
 }

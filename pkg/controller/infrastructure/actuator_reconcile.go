@@ -37,6 +37,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	FlowStateVersion1 = "1"
+)
+
 func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
 	flowState, err := a.getStateFromProviderStatus(ctx, infrastructure)
 	if err != nil {
@@ -90,7 +94,7 @@ func (a *actuator) migrateFromTerraformerState(ctx context.Context, log logr.Log
 	if err != nil {
 		return nil, err
 	}
-	flowState, err := infraflow.MigrateTerraformStateToFlowState(infrastructure.Status.State, infrastructureConfig.Networks.Zones)
+	flowState, err := MigrateTerraformStateToFlowState(infrastructure.Status.State, infrastructureConfig.Networks.Zones)
 	if err != nil {
 		return nil, fmt.Errorf("migration from terraform state failed: %w", err)
 	}
@@ -135,10 +139,23 @@ func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
 		return nil, fmt.Errorf("failed to create new AWS client: %w", err)
 	}
 
-	persistor := func(ctx context.Context, flowState *awsv1alpha1.FlowState) error {
+	persistor := func(ctx context.Context, state state.FlatMap) error {
+		flowState := &awsv1alpha1.FlowState{
+			Version: FlowStateVersion1,
+			Data:    state,
+		}
 		return a.updateProviderStatusFromFlowState(ctx, infrastructure, flowState)
 	}
-	return infraflow.NewFlowContext(log, awsClient, infrastructure, infrastructureConfig, oldFlowState, persistor)
+
+	if oldFlowState != nil && oldFlowState.Version != FlowStateVersion1 {
+		return nil, fmt.Errorf("unknown flow state version %s", oldFlowState.Version)
+	}
+	var oldState state.FlatMap
+	if oldFlowState != nil {
+		oldState = oldFlowState.Data
+	}
+
+	return infraflow.NewFlowContext(log, awsClient, infrastructure, infrastructureConfig, oldState, persistor)
 }
 
 func (a *actuator) cleanupTerraformerResources(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure) error {
@@ -177,65 +194,79 @@ func (a *actuator) updateProviderStatusFromFlowState(ctx context.Context, infras
 }
 
 func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv1alpha1.InfrastructureStatus, error) {
-	var subnets []awsv1alpha1.Subnet
-	prefix := infraflow.ChildIdZones + state.Separator
-	for k, v := range flowState.Data {
-		if strings.HasPrefix(k, prefix) {
-			parts := strings.Split(k, state.Separator)
-			if len(parts) != 3 {
-				continue
-			}
-			var purpose string
-			switch parts[2] {
-			case infraflow.IdentifierZoneSubnetPublic:
-				purpose = awsapi.PurposePublic
-			case infraflow.IdentifierZoneSubnetWorkers:
-				purpose = awsapi.PurposeNodes
-			default:
-				continue
-			}
-			subnets = append(subnets, awsv1alpha1.Subnet{
-				ID:      v,
-				Purpose: purpose,
-				Zone:    parts[1],
-			})
-		}
-	}
-
-	return &awsv1alpha1.InfrastructureStatus{
+	status := &awsv1alpha1.InfrastructureStatus{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: awsv1alpha1.SchemeGroupVersion.String(),
 			Kind:       "InfrastructureStatus",
 		},
-		VPC: awsv1alpha1.VPCStatus{
-			ID:      flowState.Data[infraflow.IdentifierVPC],
-			Subnets: subnets,
-			SecurityGroups: []awsv1alpha1.SecurityGroup{
-				{
-					Purpose: awsapi.PurposeNodes,
-					ID:      flowState.Data[infraflow.IdentifierNodesSecurityGroup],
-				},
-			},
-		},
-		EC2: awsv1alpha1.EC2{
-			KeyName: flowState.Data[infraflow.NameKeyPair],
-		},
-		IAM: awsv1alpha1.IAM{
-			InstanceProfiles: []awsv1alpha1.InstanceProfile{
-				{
-					Purpose: awsapi.PurposeNodes,
-					Name:    flowState.Data[infraflow.NameIAMInstanceProfile],
-				},
-			},
-			Roles: []awsv1alpha1.Role{
-				{
-					Purpose: awsapi.PurposeNodes,
-					ARN:     flowState.Data[infraflow.ARNIAMRole],
-				},
-			},
-		},
 		FlowState: flowState,
-	}, nil
+	}
+
+	if vpcID := flowState.Data[infraflow.IdentifierVPC]; state.IsValidValue(vpcID) {
+		var subnets []awsv1alpha1.Subnet
+		prefix := infraflow.ChildIdZones + state.Separator
+		for k, v := range flowState.Data {
+			if !state.IsValidValue(v) {
+				continue
+			}
+			if strings.HasPrefix(k, prefix) {
+				parts := strings.Split(k, state.Separator)
+				if len(parts) != 3 {
+					continue
+				}
+				var purpose string
+				switch parts[2] {
+				case infraflow.IdentifierZoneSubnetPublic:
+					purpose = awsapi.PurposePublic
+				case infraflow.IdentifierZoneSubnetWorkers:
+					purpose = awsapi.PurposeNodes
+				default:
+					continue
+				}
+				subnets = append(subnets, awsv1alpha1.Subnet{
+					ID:      v,
+					Purpose: purpose,
+					Zone:    parts[1],
+				})
+			}
+		}
+
+		status.VPC = awsv1alpha1.VPCStatus{
+			ID:      vpcID,
+			Subnets: subnets,
+		}
+		if groupID := flowState.Data[infraflow.IdentifierNodesSecurityGroup]; state.IsValidValue(groupID) {
+			status.VPC.SecurityGroups = []awsv1alpha1.SecurityGroup{
+				{
+					Purpose: awsapi.PurposeNodes,
+					ID:      groupID,
+				},
+			}
+		}
+	}
+
+	if keyName := flowState.Data[infraflow.NameKeyPair]; state.IsValidValue(keyName) {
+		status.EC2.KeyName = keyName
+	}
+
+	if name := flowState.Data[infraflow.NameIAMInstanceProfile]; state.IsValidValue(name) {
+		status.IAM.InstanceProfiles = []awsv1alpha1.InstanceProfile{
+			{
+				Purpose: awsapi.PurposeNodes,
+				Name:    name,
+			},
+		}
+	}
+	if arn := flowState.Data[infraflow.ARNIAMRole]; state.IsValidValue(arn) {
+		status.IAM.Roles = []awsv1alpha1.Role{
+			{
+				Purpose: awsapi.PurposeNodes,
+				ARN:     arn,
+			},
+		}
+	}
+
+	return status, nil
 
 }
 

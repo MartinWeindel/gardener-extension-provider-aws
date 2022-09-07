@@ -18,20 +18,15 @@
 package infraflow
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
-	awsapiv1alpha "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws/v1alpha1"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
-	"github.com/gardener/gardener/pkg/utils/flow"
 	"github.com/go-logr/logr"
-	"k8s.io/utils/pointer"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -76,47 +71,33 @@ const (
 )
 
 type FlowContext struct {
+	state.BasicFlowContext
 	infra      *extensionsv1alpha1.Infrastructure
 	config     *awsapi.InfrastructureConfig
-	log        logr.Logger
 	client     awsclient.Interface
 	updater    awsclient.Updater
 	commonTags awsclient.Tags
-
-	state                   state.Whiteboard
-	flowStatePersistor      FlowStatePersistor
-	lastPersistedGeneration int64
-	lastPersistedAt         time.Time
 }
 
-type FlowStatePersistor func(ctx context.Context, flowState *awsapiv1alpha.FlowState) error
-
-func NewFlowContext(logger logr.Logger, awsClient awsclient.Interface,
+func NewFlowContext(log logr.Logger, awsClient awsclient.Interface,
 	infra *extensionsv1alpha1.Infrastructure, config *awsapi.InfrastructureConfig,
-	oldFlowState *awsapi.FlowState, persistor FlowStatePersistor) (*FlowContext, error) {
-	rc := &FlowContext{
-		infra:              infra,
-		config:             config,
-		log:                logger,
-		client:             awsClient,
-		updater:            awsclient.NewUpdater(awsClient, config.IgnoreTags),
-		state:              state.NewWhiteboard(),
-		flowStatePersistor: persistor,
+	oldState state.FlatMap, persistor state.FlowStatePersistor) (*FlowContext, error) {
+	flowContext := &FlowContext{
+		BasicFlowContext: *state.NewBasicFlowContext(log, oldState, persistor),
+		infra:            infra,
+		config:           config,
+		client:           awsClient,
+		updater:          awsclient.NewUpdater(awsClient, config.IgnoreTags),
 	}
-	rc.commonTags = awsclient.Tags{
-		rc.tagKeyCluster(): TagValueCluster,
-		TagKeyName:         infra.Namespace,
+	flowContext.commonTags = awsclient.Tags{
+		flowContext.tagKeyCluster(): TagValueCluster,
+		TagKeyName:                  infra.Namespace,
 	}
 
-	if oldFlowState != nil && oldFlowState.Version != FlowStateVersion1 {
-		return nil, fmt.Errorf("unknown flow state version %s", oldFlowState.Version)
-	}
-
-	rc.fillStateFromFlowState(oldFlowState)
 	if config != nil && config.Networks.VPC.ID != nil {
-		rc.state.SetPtr(IdentifierVPC, config.Networks.VPC.ID)
+		flowContext.State.SetPtr(IdentifierVPC, config.Networks.VPC.ID)
 	}
-	return rc, nil
+	return flowContext, nil
 }
 
 func (c *FlowContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
@@ -124,94 +105,7 @@ func (c *FlowContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
 }
 
 func (c *FlowContext) hasVPC() bool {
-	return c.state.Has(IdentifierVPC)
-}
-
-func (c *FlowContext) logFromContext(ctx context.Context) logr.Logger {
-	if log, err := logr.FromContext(ctx); err != nil {
-		return c.log
-	} else {
-		return log
-	}
-}
-
-type TaskOption struct {
-	Dependencies []flow.TaskIDer
-	Timeout      time.Duration
-	DoIf         *bool
-}
-
-func Dependencies(dependencies ...flow.TaskIDer) TaskOption {
-	return TaskOption{Dependencies: dependencies}
-}
-
-func Timeout(timeout time.Duration) TaskOption {
-	return TaskOption{Timeout: timeout}
-}
-
-func DoIf(condition bool) TaskOption {
-	return TaskOption{DoIf: pointer.Bool(condition)}
-}
-
-func (c *FlowContext) addTask(g *flow.Graph, name string, fn flow.TaskFn, options ...TaskOption) flow.TaskIDer {
-
-	allOptions := TaskOption{}
-	for _, opt := range options {
-		if len(opt.Dependencies) > 0 {
-			allOptions.Dependencies = append(allOptions.Dependencies, opt.Dependencies...)
-		}
-		if opt.Timeout > 0 {
-			allOptions.Timeout = opt.Timeout
-		}
-		if opt.DoIf != nil {
-			condition := true
-			if allOptions.DoIf != nil {
-				condition = *allOptions.DoIf
-			}
-			condition = condition && *opt.DoIf
-			allOptions.DoIf = pointer.Bool(condition)
-		}
-	}
-
-	tunedFn := fn
-	if allOptions.DoIf != nil {
-		tunedFn = tunedFn.DoIf(*allOptions.DoIf)
-		if !*allOptions.DoIf {
-			name = "[Skipped] " + name
-		}
-	}
-	if allOptions.Timeout > 0 {
-		tunedFn = tunedFn.Timeout(allOptions.Timeout)
-	}
-	task := flow.Task{
-		Name: name,
-		Fn:   c.wrapTaskFn(g.Name(), name, tunedFn),
-	}
-
-	if len(allOptions.Dependencies) > 0 {
-		task.Dependencies = flow.NewTaskIDs(allOptions.Dependencies...)
-	}
-
-	return g.Add(task)
-}
-
-func (c *FlowContext) wrapTaskFn(flowName, taskName string, fn flow.TaskFn) flow.TaskFn {
-	return func(ctx context.Context) error {
-		taskCtx := logf.IntoContext(ctx, c.log.WithValues("flow", flowName, "task", taskName))
-		err := fn(taskCtx)
-		if err != nil {
-			// don't wrap error with '%w', as otherwise the error context get lost
-			err = fmt.Errorf("failed to %s: %s", taskName, err)
-		}
-		if perr := c.PersistState(taskCtx, false); perr != nil {
-			if err != nil {
-				c.log.Error(perr, "persisting state failed")
-			} else {
-				err = perr
-			}
-		}
-		return err
-	}
+	return c.State.Has(IdentifierVPC)
 }
 
 func (c *FlowContext) commonTagsWithSuffix(suffix string) awsclient.Tags {
@@ -230,42 +124,56 @@ func (c *FlowContext) clusterTags() awsclient.Tags {
 	return tags
 }
 
-func (c *FlowContext) UpdatedFlowState() *awsapiv1alpha.FlowState {
-	return &awsapiv1alpha.FlowState{
-		Version: FlowStateVersion1,
-		Data:    c.state.ExportAsFlatMap(),
-	}
-}
-
-func (c *FlowContext) PersistState(ctx context.Context, force bool) error {
-	if !force && c.lastPersistedAt.Add(10*time.Second).After(time.Now()) {
-		return nil
-	}
-	currentGeneration := c.state.Generation()
-	if c.lastPersistedGeneration == currentGeneration {
-		return nil
-	}
-	if c.flowStatePersistor != nil {
-		newFlowState := c.UpdatedFlowState()
-		if err := c.flowStatePersistor(ctx, newFlowState); err != nil {
-			return err
-		}
-	}
-	c.lastPersistedGeneration = currentGeneration
-	c.lastPersistedAt = time.Now()
-	return nil
-}
-
-func (c *FlowContext) fillStateFromFlowState(flowState *awsapi.FlowState) {
-	if flowState != nil {
-		c.state.ImportFromFlatMap(flowState.Data)
-	}
-}
-
 func (c *FlowContext) vpcEndpointServiceNamePrefix() string {
 	return fmt.Sprintf("com.amazonaws.%s.", c.infra.Spec.Region)
 }
 
 func (c *FlowContext) extractVpcEndpointName(item *awsclient.VpcEndpoint) string {
 	return strings.TrimPrefix(item.ServiceName, c.vpcEndpointServiceNamePrefix())
+}
+
+func (c *FlowContext) subnetSuffixHelper(zoneName string) *SubnetSuffixHelper {
+	zoneChild := c.getSubnetZoneChild(zoneName)
+	if suffix := zoneChild.Get(IdentifierZoneSuffix); suffix != nil {
+		return &SubnetSuffixHelper{suffix: *suffix}
+	}
+	zones := c.State.GetChild(ChildIdZones)
+	existing := sets.String{}
+	for _, key := range zones.GetChildrenKeys() {
+		otherChild := zones.GetChild(key)
+		if suffix := otherChild.Get(IdentifierZoneSuffix); suffix != nil {
+			existing.Insert(*suffix)
+		}
+	}
+	for i := 0; ; i++ {
+		suffix := fmt.Sprintf("z%d", i)
+		if !existing.Has(suffix) {
+			zoneChild.Set(IdentifierZoneSuffix, suffix)
+			return &SubnetSuffixHelper{suffix: suffix}
+		}
+	}
+}
+
+type SubnetSuffixHelper struct {
+	suffix string
+}
+
+func (h *SubnetSuffixHelper) GetSuffixSubnetWorkers() string {
+	return fmt.Sprintf("nodes-%s", h.suffix)
+}
+
+func (h *SubnetSuffixHelper) GetSuffixSubnetPublic() string {
+	return fmt.Sprintf("public-utility-%s", h.suffix)
+}
+
+func (h *SubnetSuffixHelper) GetSuffixSubnetPrivate() string {
+	return fmt.Sprintf("private-utility-%s", h.suffix)
+}
+
+func (h *SubnetSuffixHelper) GetSuffixElasticIP() string {
+	return fmt.Sprintf("eip-natgw-%s", h.suffix)
+}
+
+func (h *SubnetSuffixHelper) GetSuffixNATGateway() string {
+	return fmt.Sprintf("natgw-%s", h.suffix)
 }

@@ -15,7 +15,7 @@
  *
  */
 
-package infraflow
+package state
 
 import (
 	"encoding/json"

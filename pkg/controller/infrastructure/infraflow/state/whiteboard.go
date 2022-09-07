@@ -31,6 +31,8 @@ const (
 	Separator = "/"
 )
 
+type FlatMap map[string]string
+
 type Whiteboard interface {
 	IsEmpty() bool
 
@@ -50,8 +52,8 @@ type Whiteboard interface {
 	GetObject(key string) any
 	SetObject(key string, obj any)
 
-	ImportFromFlatMap(data map[string]string)
-	ExportAsFlatMap() map[string]string
+	ImportFromFlatMap(data FlatMap)
+	ExportAsFlatMap() FlatMap
 
 	// Generation returns modification generation
 	Generation() int64
@@ -156,7 +158,7 @@ func (w *whiteboard) AsMap() map[string]string {
 
 	m := map[string]string{}
 	for key, value := range w.data {
-		if value != "" && value != deleted {
+		if IsValidValue(value) {
 			m[key] = value
 		}
 	}
@@ -167,7 +169,7 @@ func (w *whiteboard) Get(key string) *string {
 	w.Lock()
 	defer w.Unlock()
 	id := w.data[key]
-	if id == deleted || id == "" {
+	if !IsValidValue(id) {
 		return nil
 	}
 	return &id
@@ -205,7 +207,7 @@ func (w *whiteboard) SetAsDeleted(key string) {
 	w.Set(key, deleted)
 }
 
-func (w *whiteboard) ImportFromFlatMap(data map[string]string) {
+func (w *whiteboard) ImportFromFlatMap(data FlatMap) {
 	for key, value := range data {
 		parts := strings.Split(key, Separator)
 		level := w
@@ -216,7 +218,7 @@ func (w *whiteboard) ImportFromFlatMap(data map[string]string) {
 	}
 }
 
-func (w *whiteboard) ExportAsFlatMap() map[string]string {
+func (w *whiteboard) ExportAsFlatMap() FlatMap {
 	data := map[string]string{}
 	w.copyMap(data, "")
 	fillDataFromChildren(data, "", w)
@@ -251,4 +253,8 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func IsValidValue(value string) bool {
+	return value != "" && value != deleted
 }
