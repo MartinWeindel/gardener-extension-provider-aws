@@ -15,7 +15,7 @@
  *
  */
 
-package state
+package shared
 
 import (
 	"sort"
@@ -27,36 +27,48 @@ import (
 )
 
 const (
-	deleted   = "<deleted>"
+	// Separator is used to on translating keys to/from flat maps
 	Separator = "/"
+	// deleted is a special value to mark a resource id as deleted
+	deleted = "<deleted>"
 )
 
+// FlatMap is a semantic name for string map used for importing and exporting
 type FlatMap map[string]string
 
 type Whiteboard interface {
 	IsEmpty() bool
 
+	// GetChild returns a sub-whiteboard for the given key. If no child exists with this name, it is created automatically.
+	// Each child has its own lock.
 	GetChild(key string) Whiteboard
+	// HasChild returns true if there is a non-empty child for that key
 	HasChild(key string) bool
+	// GetChildrenKeys returns all children keys
 	GetChildrenKeys() []string
 
+	// Get returns a valid value or nil (never "" or special deleted value)
 	Get(key string) *string
 	Has(key string) bool
 	Set(key, id string)
 	SetPtr(key string, id *string)
 	IsAlreadyDeleted(key string) bool
 	SetAsDeleted(key string)
+	// Keys returns all stored keys, even for deleted ones
 	Keys() []string
+	// AsMap returns a map with all valid key/values
 	AsMap() map[string]string
 
 	GetObject(key string) any
 	SetObject(key string, obj any)
 
+	// ImportFromFlatMap reconstructs the hierarchical structure from a flat map containing path-like keys
 	ImportFromFlatMap(data FlatMap)
+	// ExportAsFlatMap exports the hierarchical structure to a flat map with path-like keys. Objects are ignored.
 	ExportAsFlatMap() FlatMap
 
-	// Generation returns modification generation
-	Generation() int64
+	// CurrentGeneration returns current generation, which increments with any change
+	CurrentGeneration() int64
 }
 
 type whiteboard struct {
@@ -83,7 +95,7 @@ func newWhiteboard(generation *atomic.Int64) *whiteboard {
 	}
 }
 
-func (w *whiteboard) Generation() int64 {
+func (w *whiteboard) CurrentGeneration() int64 {
 	return w.generation.Load()
 }
 

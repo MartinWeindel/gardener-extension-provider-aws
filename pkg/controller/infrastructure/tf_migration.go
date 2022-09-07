@@ -25,7 +25,7 @@ import (
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
-	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/shared"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -33,7 +33,7 @@ import (
 func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones []awsapi.Zone) (*awsapi.FlowState, error) {
 	var (
 		tfRawState *terraformer.RawState
-		tfState    *state.TerraformState
+		tfState    *shared.TerraformState
 		err        error
 	)
 
@@ -61,7 +61,7 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 	default:
 		return nil, fmt.Errorf("unknown encoding of Terraformer raw state: %s", tfRawState.Encoding)
 	}
-	if tfState, err = state.UnmarshalTerraformState(data); err != nil {
+	if tfState, err = shared.UnmarshalTerraformState(data); err != nil {
 		return nil, fmt.Errorf("could not decode terraform state: %w", err)
 	}
 
@@ -86,7 +86,7 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 
 	if instances := tfState.GetManagedResourceInstances("aws_vpc_endpoint"); len(instances) > 0 {
 		for name, id := range instances {
-			key := infraflow.ChildIdVPCEndpoints + state.Separator + strings.TrimPrefix(name, "vpc_gwep_")
+			key := infraflow.ChildIdVPCEndpoints + shared.Separator + strings.TrimPrefix(name, "vpc_gwep_")
 			setFlowStateData(flowState, key, &id)
 		}
 	}
@@ -94,7 +94,7 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 	tfNamePrefixes := []string{"nodes_", "private_utility_", "public_utility"}
 	flowNames := []string{infraflow.IdentifierZoneSubnetWorkers, infraflow.IdentifierZoneSubnetPrivate, infraflow.IdentifierZoneSubnetPublic}
 	for i, zone := range zones {
-		keyPrefix := infraflow.ChildIdZones + state.Separator + zone.Name + state.Separator
+		keyPrefix := infraflow.ChildIdZones + shared.Separator + zone.Name + shared.Separator
 		suffix := fmt.Sprintf("z%d", i)
 		setFlowStateData(flowState, keyPrefix+infraflow.IdentifierZoneSuffix, &suffix)
 

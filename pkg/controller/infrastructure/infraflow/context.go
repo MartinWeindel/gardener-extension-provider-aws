@@ -23,7 +23,7 @@ import (
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
-	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/shared"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -71,7 +71,8 @@ const (
 )
 
 type FlowContext struct {
-	state.BasicFlowContext
+	shared.BasicFlowContext
+	state      shared.Whiteboard
 	infra      *extensionsv1alpha1.Infrastructure
 	config     *awsapi.InfrastructureConfig
 	client     awsclient.Interface
@@ -81,9 +82,16 @@ type FlowContext struct {
 
 func NewFlowContext(log logr.Logger, awsClient awsclient.Interface,
 	infra *extensionsv1alpha1.Infrastructure, config *awsapi.InfrastructureConfig,
-	oldState state.FlatMap, persistor state.FlowStatePersistor) (*FlowContext, error) {
+	oldState shared.FlatMap, persistor shared.FlowStatePersistor) (*FlowContext, error) {
+
+	whiteboard := shared.NewWhiteboard()
+	if oldState != nil {
+		whiteboard.ImportFromFlatMap(oldState)
+	}
+
 	flowContext := &FlowContext{
-		BasicFlowContext: *state.NewBasicFlowContext(log, oldState, persistor),
+		BasicFlowContext: *shared.NewBasicFlowContext(log, whiteboard, persistor),
+		state:            whiteboard,
 		infra:            infra,
 		config:           config,
 		client:           awsClient,
@@ -93,9 +101,8 @@ func NewFlowContext(log logr.Logger, awsClient awsclient.Interface,
 		flowContext.tagKeyCluster(): TagValueCluster,
 		TagKeyName:                  infra.Namespace,
 	}
-
 	if config != nil && config.Networks.VPC.ID != nil {
-		flowContext.State.SetPtr(IdentifierVPC, config.Networks.VPC.ID)
+		flowContext.state.SetPtr(IdentifierVPC, config.Networks.VPC.ID)
 	}
 	return flowContext, nil
 }
@@ -105,7 +112,7 @@ func (c *FlowContext) GetInfrastructureConfig() *awsapi.InfrastructureConfig {
 }
 
 func (c *FlowContext) hasVPC() bool {
-	return c.State.Has(IdentifierVPC)
+	return c.state.Has(IdentifierVPC)
 }
 
 func (c *FlowContext) commonTagsWithSuffix(suffix string) awsclient.Tags {
@@ -137,7 +144,7 @@ func (c *FlowContext) subnetSuffixHelper(zoneName string) *SubnetSuffixHelper {
 	if suffix := zoneChild.Get(IdentifierZoneSuffix); suffix != nil {
 		return &SubnetSuffixHelper{suffix: *suffix}
 	}
-	zones := c.State.GetChild(ChildIdZones)
+	zones := c.state.GetChild(ChildIdZones)
 	existing := sets.String{}
 	for _, key := range zones.GetChildrenKeys() {
 		otherChild := zones.GetChild(key)

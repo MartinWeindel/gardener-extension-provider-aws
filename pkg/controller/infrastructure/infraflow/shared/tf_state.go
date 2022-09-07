@@ -15,7 +15,7 @@
  *
  */
 
-package state
+package shared
 
 import (
 	"encoding/json"

@@ -26,7 +26,7 @@ import (
 	"github.com/gardener/gardener-extension-provider-aws/pkg/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
 	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow"
-	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
+	"github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/shared"
 	extensionscontroller "github.com/gardener/gardener/extensions/pkg/controller"
 	"github.com/gardener/gardener/extensions/pkg/terraformer"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
@@ -47,17 +47,17 @@ func (a *actuator) Reconcile(ctx context.Context, log logr.Logger, infrastructur
 		return err
 	}
 	if flowState != nil {
-		return a.reconcileWithFlow(ctx, log, infrastructure, cluster, flowState)
+		return a.reconcileWithFlow(ctx, log, infrastructure, flowState)
 	}
 	if a.shouldUseFlow(infrastructure, cluster) {
 		flowState, err = a.migrateFromTerraformerState(ctx, log, infrastructure)
 		if err != nil {
 			return err
 		}
-		return a.reconcileWithFlow(ctx, log, infrastructure, cluster, flowState)
+		return a.reconcileWithFlow(ctx, log, infrastructure, flowState)
 	}
 
-	infrastructureStatus, state, err := ReconcileWithTerraform(
+	infrastructureStatus, state, err := ReconcileWithTerraformer(
 		ctx,
 		log,
 		a.RESTConfig(),
@@ -139,7 +139,7 @@ func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
 		return nil, fmt.Errorf("failed to create new AWS client: %w", err)
 	}
 
-	persistor := func(ctx context.Context, state state.FlatMap) error {
+	persistor := func(ctx context.Context, state shared.FlatMap) error {
 		flowState := &awsv1alpha1.FlowState{
 			Version: FlowStateVersion1,
 			Data:    state,
@@ -150,7 +150,7 @@ func (a *actuator) createFlowContext(ctx context.Context, log logr.Logger,
 	if oldFlowState != nil && oldFlowState.Version != FlowStateVersion1 {
 		return nil, fmt.Errorf("unknown flow state version %s", oldFlowState.Version)
 	}
-	var oldState state.FlatMap
+	var oldState shared.FlatMap
 	if oldFlowState != nil {
 		oldState = oldFlowState.Data
 	}
@@ -171,7 +171,7 @@ func (a *actuator) cleanupTerraformerResources(ctx context.Context, log logr.Log
 }
 
 func (a *actuator) reconcileWithFlow(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure,
-	_ *extensionscontroller.Cluster, oldFlowState *awsapi.FlowState) error {
+	oldFlowState *awsapi.FlowState) error {
 	log.Info("reconcileWithFlow")
 
 	flowContext, err := a.createFlowContext(ctx, log, infrastructure, oldFlowState)
@@ -202,15 +202,15 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv
 		FlowState: flowState,
 	}
 
-	if vpcID := flowState.Data[infraflow.IdentifierVPC]; state.IsValidValue(vpcID) {
+	if vpcID := flowState.Data[infraflow.IdentifierVPC]; shared.IsValidValue(vpcID) {
 		var subnets []awsv1alpha1.Subnet
-		prefix := infraflow.ChildIdZones + state.Separator
+		prefix := infraflow.ChildIdZones + shared.Separator
 		for k, v := range flowState.Data {
-			if !state.IsValidValue(v) {
+			if !shared.IsValidValue(v) {
 				continue
 			}
 			if strings.HasPrefix(k, prefix) {
-				parts := strings.Split(k, state.Separator)
+				parts := strings.Split(k, shared.Separator)
 				if len(parts) != 3 {
 					continue
 				}
@@ -235,7 +235,7 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv
 			ID:      vpcID,
 			Subnets: subnets,
 		}
-		if groupID := flowState.Data[infraflow.IdentifierNodesSecurityGroup]; state.IsValidValue(groupID) {
+		if groupID := flowState.Data[infraflow.IdentifierNodesSecurityGroup]; shared.IsValidValue(groupID) {
 			status.VPC.SecurityGroups = []awsv1alpha1.SecurityGroup{
 				{
 					Purpose: awsapi.PurposeNodes,
@@ -245,11 +245,11 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv
 		}
 	}
 
-	if keyName := flowState.Data[infraflow.NameKeyPair]; state.IsValidValue(keyName) {
+	if keyName := flowState.Data[infraflow.NameKeyPair]; shared.IsValidValue(keyName) {
 		status.EC2.KeyName = keyName
 	}
 
-	if name := flowState.Data[infraflow.NameIAMInstanceProfile]; state.IsValidValue(name) {
+	if name := flowState.Data[infraflow.NameIAMInstanceProfile]; shared.IsValidValue(name) {
 		status.IAM.InstanceProfiles = []awsv1alpha1.InstanceProfile{
 			{
 				Purpose: awsapi.PurposeNodes,
@@ -257,7 +257,7 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv
 			},
 		}
 	}
-	if arn := flowState.Data[infraflow.ARNIAMRole]; state.IsValidValue(arn) {
+	if arn := flowState.Data[infraflow.ARNIAMRole]; shared.IsValidValue(arn) {
 		status.IAM.Roles = []awsv1alpha1.Role{
 			{
 				Purpose: awsapi.PurposeNodes,
@@ -270,8 +270,8 @@ func computeProviderStatusFromFlowState(flowState *awsv1alpha1.FlowState) (*awsv
 
 }
 
-// ReconcileWithTerraform reconciles the given Infrastructure object with terraform. It returns the provider specific status and the Terraform state.
-func ReconcileWithTerraform(
+// ReconcileWithTerraformer reconciles the given Infrastructure object with terraform. It returns the provider specific status and the Terraform state.
+func ReconcileWithTerraformer(
 	ctx context.Context,
 	logger logr.Logger,
 	restConfig *rest.Config,

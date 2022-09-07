@@ -15,7 +15,7 @@
  *
  */
 
-package state
+package shared
 
 import (
 	"context"
@@ -28,57 +28,73 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-type FlowStatePersistor func(ctx context.Context, flatMap FlatMap) error
-
+// TaskOption contains options for created flow tasks
 type TaskOption struct {
 	Dependencies []flow.TaskIDer
 	Timeout      time.Duration
 	DoIf         *bool
 }
 
+// Dependencies creates a TaskOption for dependencies
 func Dependencies(dependencies ...flow.TaskIDer) TaskOption {
 	return TaskOption{Dependencies: dependencies}
 }
 
+// Timeout creates a TaskOption for Timeout
 func Timeout(timeout time.Duration) TaskOption {
 	return TaskOption{Timeout: timeout}
 }
 
+// DoIf creates a TaskOption for DoIf
 func DoIf(condition bool) TaskOption {
 	return TaskOption{DoIf: pointer.Bool(condition)}
 }
 
-type BasicFlowContext struct {
-	Log   logr.Logger
-	State Whiteboard
+// FlowStatePersistor persists the flat map to the provider status
+type FlowStatePersistor func(ctx context.Context, flatMap FlatMap) error
 
+// BasicFlowContext provides logic for persisting the state and add tasks to the flow graph.
+type BasicFlowContext struct {
+	Log logr.Logger
+
+	exporter                StateExporter
 	flowStatePersistor      FlowStatePersistor
 	lastPersistedGeneration int64
 	lastPersistedAt         time.Time
+	PersistInterval         time.Duration
 }
 
-func NewBasicFlowContext(logger logr.Logger, oldState FlatMap, persistor FlowStatePersistor) *BasicFlowContext {
+// StateExporter knows how to export the internal state to a flat string map.
+type StateExporter interface {
+	// CurrentGeneration is a counter which increments on changes of the internal state.
+	CurrentGeneration() int64
+	// Exports all or parts of the internal state to a flat string map.
+	ExportAsFlatMap() FlatMap
+}
+
+// NewBasicFlowContext creates a new `BasicFlowContext`.
+func NewBasicFlowContext(logger logr.Logger, exporter StateExporter, persistor FlowStatePersistor) *BasicFlowContext {
 	flowContext := &BasicFlowContext{
 		Log:                logger,
-		State:              NewWhiteboard(),
+		exporter:           exporter,
 		flowStatePersistor: persistor,
-	}
-	if oldState != nil {
-		flowContext.State.ImportFromFlatMap(oldState)
+		PersistInterval:    10 * time.Second,
 	}
 	return flowContext
 }
 
+// PersistState persists the internal state to the provider status if it has changed and force is true
+// or it has not been persisted during the `PersistInterval`.
 func (c *BasicFlowContext) PersistState(ctx context.Context, force bool) error {
-	if !force && c.lastPersistedAt.Add(10*time.Second).After(time.Now()) {
+	if !force && c.lastPersistedAt.Add(c.PersistInterval).After(time.Now()) {
 		return nil
 	}
-	currentGeneration := c.State.Generation()
+	currentGeneration := c.exporter.CurrentGeneration()
 	if c.lastPersistedGeneration == currentGeneration {
 		return nil
 	}
 	if c.flowStatePersistor != nil {
-		newState := c.State.ExportAsFlatMap()
+		newState := c.exporter.ExportAsFlatMap()
 		if err := c.flowStatePersistor(ctx, newState); err != nil {
 			return err
 		}
@@ -88,6 +104,7 @@ func (c *BasicFlowContext) PersistState(ctx context.Context, force bool) error {
 	return nil
 }
 
+// LogFromContext returns the log from the context when called within a task function added with the `AddTask` method.
 func (c *BasicFlowContext) LogFromContext(ctx context.Context) logr.Logger {
 	if log, err := logr.FromContext(ctx); err != nil {
 		return c.Log
@@ -96,6 +113,7 @@ func (c *BasicFlowContext) LogFromContext(ctx context.Context) logr.Logger {
 	}
 }
 
+// AddTask adds a wrapped task for the given task function and options.
 func (c *BasicFlowContext) AddTask(g *flow.Graph, name string, fn flow.TaskFn, options ...TaskOption) flow.TaskIDer {
 	allOptions := TaskOption{}
 	for _, opt := range options {

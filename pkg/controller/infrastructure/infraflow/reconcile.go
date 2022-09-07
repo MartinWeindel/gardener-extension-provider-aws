@@ -33,7 +33,7 @@ import (
 
 	"github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 	awsclient "github.com/gardener/gardener-extension-provider-aws/pkg/aws/client"
-	. "github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/state"
+	. "github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/shared"
 )
 
 const (
@@ -119,13 +119,13 @@ func (c *FlowContext) ensureDhcpOptions(ctx context.Context) error {
 			"domain-name-servers": {"AmazonProvidedDNS"},
 		},
 	}
-	current, err := findExisting(ctx, c.State.Get(IdentifierDHCPOptions), c.commonTags,
+	current, err := findExisting(ctx, c.state.Get(IdentifierDHCPOptions), c.commonTags,
 		c.client.GetVpcDhcpOptions, c.client.FindVpcDhcpOptionsByTags)
 	if err != nil {
 		return err
 	}
 	if current != nil {
-		c.State.Set(IdentifierDHCPOptions, current.DhcpOptionsId)
+		c.state.Set(IdentifierDHCPOptions, current.DhcpOptionsId)
 		if _, err := c.updater.UpdateEC2Tags(ctx, current.DhcpOptionsId, c.commonTags, current.Tags); err != nil {
 			return err
 		}
@@ -135,7 +135,7 @@ func (c *FlowContext) ensureDhcpOptions(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.State.Set(IdentifierDHCPOptions, created.DhcpOptionsId)
+		c.state.Set(IdentifierDHCPOptions, created.DhcpOptionsId)
 	}
 
 	return nil
@@ -155,20 +155,20 @@ func (c *FlowContext) ensureManagedVpc(ctx context.Context) error {
 		Tags:               c.commonTags,
 		EnableDnsSupport:   true,
 		EnableDnsHostnames: true,
-		DhcpOptionsId:      c.State.Get(IdentifierDHCPOptions),
+		DhcpOptionsId:      c.state.Get(IdentifierDHCPOptions),
 	}
 	if c.config.Networks.VPC.CIDR == nil {
 		return fmt.Errorf("missing VPC CIDR")
 	}
 	desired.CidrBlock = *c.config.Networks.VPC.CIDR
-	current, err := findExisting(ctx, c.State.Get(IdentifierVPC), c.commonTags,
+	current, err := findExisting(ctx, c.state.Get(IdentifierVPC), c.commonTags,
 		c.client.GetVpc, c.client.FindVpcsByTags)
 	if err != nil {
 		return err
 	}
 
 	if current != nil {
-		c.State.Set(IdentifierVPC, current.VpcId)
+		c.state.Set(IdentifierVPC, current.VpcId)
 		if _, err := c.updater.UpdateVpc(ctx, desired, current); err != nil {
 			return err
 		}
@@ -178,7 +178,7 @@ func (c *FlowContext) ensureManagedVpc(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.State.Set(IdentifierVPC, created.VpcId)
+		c.state.Set(IdentifierVPC, created.VpcId)
 		if _, err := c.updater.UpdateVpc(ctx, desired, created); err != nil {
 			return err
 		}
@@ -197,17 +197,17 @@ func (c *FlowContext) ensureExistingVpc(ctx context.Context) error {
 	if current == nil {
 		return fmt.Errorf("VPC %s has not been found", vpcID)
 	}
-	c.State.Set(IdentifierVPC, vpcID)
+	c.state.Set(IdentifierVPC, vpcID)
 	gw, err := c.client.FindInternetGatewayByVPC(ctx, vpcID)
 	if err != nil {
 		return fmt.Errorf("Internet Gateway not found for VPC %s", vpcID)
 	}
-	c.State.Set(IdentifierInternetGateway, gw.InternetGatewayId)
+	c.state.Set(IdentifierInternetGateway, gw.InternetGatewayId)
 	return nil
 }
 
 func (c *FlowContext) ensureDefaultSecurityGroup(ctx context.Context) error {
-	current, err := c.client.FindDefaultSecurityGroupByVpcId(ctx, *c.State.Get(IdentifierVPC))
+	current, err := c.client.FindDefaultSecurityGroupByVpcId(ctx, *c.state.Get(IdentifierVPC))
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func (c *FlowContext) ensureDefaultSecurityGroup(ctx context.Context) error {
 		return fmt.Errorf("default security group not found")
 	}
 
-	c.State.Set(IdentifierDefaultSecurityGroup, current.GroupId)
+	c.state.Set(IdentifierDefaultSecurityGroup, current.GroupId)
 	desired := current.Clone()
 	desired.Rules = nil
 	if _, err := c.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
@@ -228,16 +228,16 @@ func (c *FlowContext) ensureInternetGateway(ctx context.Context) error {
 	log := c.LogFromContext(ctx)
 	desired := &awsclient.InternetGateway{
 		Tags:  c.commonTags,
-		VpcId: c.State.Get(IdentifierVPC),
+		VpcId: c.state.Get(IdentifierVPC),
 	}
-	current, err := findExisting(ctx, c.State.Get(IdentifierInternetGateway), c.commonTags,
+	current, err := findExisting(ctx, c.state.Get(IdentifierInternetGateway), c.commonTags,
 		c.client.GetInternetGateway, c.client.FindInternetGatewaysByTags)
 	if err != nil {
 		return err
 	}
 	if current != nil {
-		c.State.Set(IdentifierInternetGateway, current.InternetGatewayId)
-		if err := c.client.AttachInternetGateway(ctx, *c.State.Get(IdentifierVPC), current.InternetGatewayId); err != nil {
+		c.state.Set(IdentifierInternetGateway, current.InternetGatewayId)
+		if err := c.client.AttachInternetGateway(ctx, *c.state.Get(IdentifierVPC), current.InternetGatewayId); err != nil {
 			return err
 		}
 		if _, err := c.updater.UpdateEC2Tags(ctx, current.InternetGatewayId, c.commonTags, current.Tags); err != nil {
@@ -249,8 +249,8 @@ func (c *FlowContext) ensureInternetGateway(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.State.Set(IdentifierInternetGateway, created.InternetGatewayId)
-		if err := c.client.AttachInternetGateway(ctx, *c.State.Get(IdentifierVPC), created.InternetGatewayId); err != nil {
+		c.state.Set(IdentifierInternetGateway, created.InternetGatewayId)
+		if err := c.client.AttachInternetGateway(ctx, *c.state.Get(IdentifierVPC), created.InternetGatewayId); err != nil {
 			return err
 		}
 	}
@@ -260,12 +260,12 @@ func (c *FlowContext) ensureInternetGateway(ctx context.Context) error {
 
 func (c *FlowContext) ensureGatewayEndpoints(ctx context.Context) error {
 	log := c.LogFromContext(ctx)
-	child := c.State.GetChild(ChildIdVPCEndpoints)
+	child := c.state.GetChild(ChildIdVPCEndpoints)
 	var desired []*awsclient.VpcEndpoint
 	for _, endpoint := range c.config.Networks.VPC.GatewayEndpoints {
 		desired = append(desired, &awsclient.VpcEndpoint{
 			Tags:        c.commonTagsWithSuffix(fmt.Sprintf("gw-%s", endpoint)),
-			VpcId:       c.State.Get(IdentifierVPC),
+			VpcId:       c.state.Get(IdentifierVPC),
 			ServiceName: c.vpcEndpointServiceNamePrefix() + endpoint,
 		})
 	}
@@ -302,7 +302,7 @@ func (c *FlowContext) ensureGatewayEndpoints(ctx context.Context) error {
 }
 
 func (c *FlowContext) collectExistingVPCEndpoints(ctx context.Context) ([]*awsclient.VpcEndpoint, error) {
-	child := c.State.GetChild(ChildIdVPCEndpoints)
+	child := c.state.GetChild(ChildIdVPCEndpoints)
 	var ids []string
 	for _, id := range child.AsMap() {
 		ids = append(ids, id)
@@ -335,42 +335,42 @@ func (c *FlowContext) ensureMainRouteTable(ctx context.Context) error {
 	log := c.LogFromContext(ctx)
 	desired := &awsclient.RouteTable{
 		Tags:  c.commonTags,
-		VpcId: c.State.Get(IdentifierVPC),
+		VpcId: c.state.Get(IdentifierVPC),
 		Routes: []*awsclient.Route{
 			{
 				DestinationCidrBlock: "0.0.0.0/0",
-				GatewayId:            c.State.Get(IdentifierInternetGateway),
+				GatewayId:            c.state.Get(IdentifierInternetGateway),
 			},
 		},
 	}
-	current, err := findExisting(ctx, c.State.Get(IdentifierMainRouteTable), c.commonTags,
+	current, err := findExisting(ctx, c.state.Get(IdentifierMainRouteTable), c.commonTags,
 		c.client.GetRouteTable, c.client.FindRouteTablesByTags)
 	if err != nil {
 		return err
 	}
 	if current != nil {
-		c.State.Set(IdentifierMainRouteTable, current.RouteTableId)
-		c.State.SetObject(ObjectMainRouteTable, current)
+		c.state.Set(IdentifierMainRouteTable, current.RouteTableId)
+		c.state.SetObject(ObjectMainRouteTable, current)
 		log.Info("updating route table...")
 		updated, err := c.updater.UpdateRouteTable(ctx, desired, current)
 		if err != nil {
 			return err
 		}
-		c.State.SetObject(ObjectMainRouteTable, updated)
+		c.state.SetObject(ObjectMainRouteTable, updated)
 	} else {
 		log.Info("creating...")
 		created, err := c.client.CreateRouteTable(ctx, desired)
 		if err != nil {
 			return err
 		}
-		c.State.Set(IdentifierMainRouteTable, created.RouteTableId)
-		c.State.SetObject(ObjectMainRouteTable, created)
+		c.state.Set(IdentifierMainRouteTable, created.RouteTableId)
+		c.state.SetObject(ObjectMainRouteTable, created)
 		log.Info("updating route table...")
 		updated, err := c.updater.UpdateRouteTable(ctx, desired, created)
 		if err != nil {
 			return err
 		}
-		c.State.SetObject(ObjectMainRouteTable, updated)
+		c.state.SetObject(ObjectMainRouteTable, updated)
 	}
 
 	return nil
@@ -382,7 +382,7 @@ func (c *FlowContext) ensureNodesSecurityGroup(ctx context.Context) error {
 	desired := &awsclient.SecurityGroup{
 		Tags:        c.commonTagsWithSuffix("nodes"),
 		GroupName:   groupName,
-		VpcId:       c.State.Get(IdentifierVPC),
+		VpcId:       c.state.Get(IdentifierVPC),
 		Description: pointer.String("Security group for nodes"),
 		Rules: []*awsclient.SecurityGroupRule{
 			{
@@ -442,14 +442,14 @@ func (c *FlowContext) ensureNodesSecurityGroup(ctx context.Context) error {
 				CidrBlocks: []string{zone.Public},
 			})
 	}
-	current, err := findExisting(ctx, c.State.Get(IdentifierNodesSecurityGroup), c.commonTags,
+	current, err := findExisting(ctx, c.state.Get(IdentifierNodesSecurityGroup), c.commonTags,
 		c.client.GetSecurityGroup, c.client.FindSecurityGroupsByTags,
 		func(item *awsclient.SecurityGroup) bool { return item.GroupName == groupName })
 	if err != nil {
 		return err
 	}
 	if current != nil {
-		c.State.Set(IdentifierNodesSecurityGroup, current.GroupId)
+		c.state.Set(IdentifierNodesSecurityGroup, current.GroupId)
 		if _, err := c.updater.UpdateSecurityGroup(ctx, desired, current); err != nil {
 			return err
 		}
@@ -459,7 +459,7 @@ func (c *FlowContext) ensureNodesSecurityGroup(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.State.Set(IdentifierNodesSecurityGroup, created.GroupId)
+		c.state.Set(IdentifierNodesSecurityGroup, created.GroupId)
 		current, err = c.client.GetSecurityGroup(ctx, created.GroupId)
 		if err != nil {
 			return err
@@ -484,19 +484,19 @@ func (c *FlowContext) ensureZones(ctx context.Context) error {
 		desired = append(desired,
 			&awsclient.Subnet{
 				Tags:             tagsWorkers,
-				VpcId:            c.State.Get(IdentifierVPC),
+				VpcId:            c.state.Get(IdentifierVPC),
 				CidrBlock:        zone.Workers,
 				AvailabilityZone: zone.Name,
 			},
 			&awsclient.Subnet{
 				Tags:             tagsPublic,
-				VpcId:            c.State.Get(IdentifierVPC),
+				VpcId:            c.state.Get(IdentifierVPC),
 				CidrBlock:        zone.Public,
 				AvailabilityZone: zone.Name,
 			},
 			&awsclient.Subnet{
 				Tags:             tagsPrivate,
-				VpcId:            c.State.Get(IdentifierVPC),
+				VpcId:            c.state.Get(IdentifierVPC),
 				CidrBlock:        zone.Internal,
 				AvailabilityZone: zone.Name,
 			})
@@ -559,7 +559,7 @@ func (c *FlowContext) addZoneDeletionTasksBySubnets(g *flow.Graph, toBeDeleted [
 }
 
 func (c *FlowContext) collectExistingSubnets(ctx context.Context) ([]*awsclient.Subnet, error) {
-	child := c.State.GetChild(ChildIdZones)
+	child := c.state.GetChild(ChildIdZones)
 	var ids []string
 	for _, zoneKey := range child.GetChildrenKeys() {
 		zoneChild := child.GetChild(zoneKey)
@@ -850,7 +850,7 @@ func (c *FlowContext) ensurePrivateRoutingTable(zoneName string) flow.TaskFn {
 		id := child.Get(IdentifierZoneRouteTable)
 		desired := &awsclient.RouteTable{
 			Tags:  c.commonTagsWithSuffix(fmt.Sprintf("private-%s", zoneName)),
-			VpcId: c.State.Get(IdentifierVPC),
+			VpcId: c.state.Get(IdentifierVPC),
 			Routes: []*awsclient.Route{
 				{
 					DestinationCidrBlock: "0.0.0.0/0",
@@ -942,7 +942,7 @@ func (c *FlowContext) ensureZoneRoutingTableAssociation(ctx context.Context, zon
 	if zoneRouteTable {
 		obj = child.GetObject(ObjectZoneRouteTable)
 	} else {
-		obj = c.State.GetObject(ObjectMainRouteTable)
+		obj = c.state.GetObject(ObjectMainRouteTable)
 	}
 	if obj == nil {
 		return fmt.Errorf("missing route table object")
@@ -999,7 +999,7 @@ func (c *FlowContext) deleteZoneRoutingTableAssociation(ctx context.Context, zon
 		if zoneRouteTable {
 			routeTableID = child.Get(IdentifierZoneRouteTable)
 		} else {
-			routeTableID = c.State.Get(IdentifierMainRouteTable)
+			routeTableID = c.state.Get(IdentifierMainRouteTable)
 		}
 		if routeTableID != nil {
 			routeTable, err := c.client.GetRouteTable(ctx, *routeTableID)
@@ -1051,16 +1051,16 @@ func (c *FlowContext) ensureIAMRole(ctx context.Context) error {
 	}
 
 	if current != nil {
-		c.State.Set(NameIAMRole, current.RoleName)
-		c.State.Set(ARNIAMRole, current.ARN)
+		c.state.Set(NameIAMRole, current.RoleName)
+		c.state.Set(ARNIAMRole, current.ARN)
 	} else {
 		log.Info("creating...")
 		created, err := c.client.CreateIAMRole(ctx, desired)
 		if err != nil {
 			return err
 		}
-		c.State.Set(NameIAMRole, created.RoleName)
-		c.State.Set(ARNIAMRole, created.ARN)
+		c.state.Set(NameIAMRole, created.RoleName)
+		c.state.Set(ARNIAMRole, created.ARN)
 	}
 
 	return nil
@@ -1079,7 +1079,7 @@ func (c *FlowContext) ensureIAMInstanceProfile(ctx context.Context) error {
 	}
 
 	if current != nil {
-		c.State.Set(NameIAMInstanceProfile, current.InstanceProfileName)
+		c.state.Set(NameIAMInstanceProfile, current.InstanceProfileName)
 		if _, err := c.updater.UpdateIAMInstanceProfile(ctx, desired, current); err != nil {
 			return err
 		}
@@ -1089,7 +1089,7 @@ func (c *FlowContext) ensureIAMInstanceProfile(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.State.Set(NameIAMInstanceProfile, created.InstanceProfileName)
+		c.state.Set(NameIAMInstanceProfile, created.InstanceProfileName)
 		if _, err := c.updater.UpdateIAMInstanceProfile(ctx, desired, created); err != nil {
 			return err
 		}
@@ -1155,7 +1155,7 @@ func (c *FlowContext) ensureIAMRolePolicy(ctx context.Context) error {
 	}
 
 	if current != nil {
-		c.State.Set(NameIAMRolePolicy, name)
+		c.state.Set(NameIAMRolePolicy, name)
 		if current.PolicyDocument != desired.PolicyDocument {
 			if err := c.client.PutIAMRolePolicy(ctx, desired); err != nil {
 				return err
@@ -1166,7 +1166,7 @@ func (c *FlowContext) ensureIAMRolePolicy(ctx context.Context) error {
 		if err := c.client.PutIAMRolePolicy(ctx, desired); err != nil {
 			return err
 		}
-		c.State.Set(NameIAMRolePolicy, name)
+		c.state.Set(NameIAMRolePolicy, name)
 	}
 
 	return nil
@@ -1184,13 +1184,13 @@ func (c *FlowContext) ensureKeyPair(ctx context.Context) error {
 	}
 
 	if current != nil {
-		c.State.Set(NameKeyPair, desired.KeyName)
+		c.state.Set(NameKeyPair, desired.KeyName)
 	} else {
 		log.Info("creating")
 		if _, err := c.client.ImportKeyPair(ctx, desired.KeyName, c.infra.Spec.SSHPublicKey, c.commonTags); err != nil {
 			return err
 		}
-		c.State.Set(NameKeyPair, desired.KeyName)
+		c.state.Set(NameKeyPair, desired.KeyName)
 	}
 
 	return nil
@@ -1201,7 +1201,7 @@ func (c *FlowContext) getSubnetZoneChildByItem(item *awsclient.Subnet) Whiteboar
 }
 
 func (c *FlowContext) getSubnetZoneChild(zoneName string) Whiteboard {
-	return c.State.GetChild(ChildIdZones).GetChild(zoneName)
+	return c.state.GetChild(ChildIdZones).GetChild(zoneName)
 }
 
 func (c *FlowContext) getSubnetKey(item *awsclient.Subnet) (zoneName, subnetKey string, err error) {
