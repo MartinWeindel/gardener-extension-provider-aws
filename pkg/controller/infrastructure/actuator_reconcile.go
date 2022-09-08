@@ -38,6 +38,7 @@ import (
 )
 
 const (
+	// FlowStateVersion1 is the current version of the flow state stored in the provider status
 	FlowStateVersion1 = "1"
 )
 
@@ -94,7 +95,7 @@ func (a *actuator) migrateFromTerraformerState(ctx context.Context, log logr.Log
 	if err != nil {
 		return nil, err
 	}
-	flowState, err := MigrateTerraformStateToFlowState(infrastructure.Status.State, infrastructureConfig.Networks.Zones)
+	flowState, err := migrateTerraformStateToFlowState(infrastructure.Status.State, infrastructureConfig.Networks.Zones)
 	if err != nil {
 		return nil, fmt.Errorf("migration from terraform state failed: %w", err)
 	}

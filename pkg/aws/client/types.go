@@ -166,12 +166,14 @@ func (f FactoryFunc) NewClient(accessKeyID, secretAccessKey, region string) (Int
 	return f(accessKeyID, secretAccessKey, region)
 }
 
+// DhcpOptions contains the relevant fields of a EC2 DHCP options resource.
 type DhcpOptions struct {
 	Tags
 	DhcpOptionsId      string
 	DhcpConfigurations map[string][]string
 }
 
+// VPC contains the relevant fields of a EC2 VPC resource.
 type VPC struct {
 	Tags
 	VpcId              string
@@ -181,6 +183,7 @@ type VPC struct {
 	DhcpOptionsId      *string
 }
 
+// SecurityGroup contains the relevant fields of a EC2 security group resource.
 type SecurityGroup struct {
 	Tags
 	GroupId     string
@@ -190,6 +193,7 @@ type SecurityGroup struct {
 	Rules       []*SecurityGroupRule
 }
 
+// Clone creates a copy.
 func (sg *SecurityGroup) Clone() *SecurityGroup {
 	copy := *sg
 	copy.Rules = copyArray(sg.Rules)
@@ -197,6 +201,7 @@ func (sg *SecurityGroup) Clone() *SecurityGroup {
 	return &copy
 }
 
+// SortedClone creates a copy with sorted rules.
 func (sg *SecurityGroup) SortedClone() *SecurityGroup {
 	copy := sg.Clone()
 	sort.Slice(copy.Rules, func(i, j int) bool {
@@ -207,6 +212,7 @@ func (sg *SecurityGroup) SortedClone() *SecurityGroup {
 	return copy
 }
 
+// EquivalentRulesTo returns true if the security rules are equivalent to the rules of another security group.
 func (sg *SecurityGroup) EquivalentRulesTo(other *SecurityGroup) bool {
 	if len(sg.Rules) != len(other.Rules) {
 		return false
@@ -223,6 +229,7 @@ func (sg *SecurityGroup) EquivalentRulesTo(other *SecurityGroup) bool {
 	return true
 }
 
+// DiffRules calculates the different rules to another security group.
 func (sg *SecurityGroup) DiffRules(other *SecurityGroup) (addedRules, removedRules []*SecurityGroupRule) {
 	a := sg.SortedClone()
 	b := other.SortedClone()
@@ -260,13 +267,17 @@ func (sg *SecurityGroup) DiffRules(other *SecurityGroup) (addedRules, removedRul
 	return
 }
 
+// SecurityGroupRuleType is type for security group rule types
 type SecurityGroupRuleType string
 
 const (
+	// SecurityGroupRuleTypeIngress is the type for ingress rules
 	SecurityGroupRuleTypeIngress SecurityGroupRuleType = "ingress"
-	SecurityGroupRuleTypeEgress  SecurityGroupRuleType = "egress"
+	// SecurityGroupRuleTypeEgress is the type for egress rules
+	SecurityGroupRuleTypeEgress SecurityGroupRuleType = "egress"
 )
 
+// SecurityGroupRule contains the relevant fields of a EC2 security group rule resource.
 type SecurityGroupRule struct {
 	Type       SecurityGroupRuleType
 	FromPort   int
@@ -277,18 +288,21 @@ type SecurityGroupRule struct {
 	Foreign    *string
 }
 
+// Clone creates a copy.
 func (sgr *SecurityGroupRule) Clone() *SecurityGroupRule {
 	copy := *sgr
 	copy.CidrBlocks = copyArray(sgr.CidrBlocks)
 	return &copy
 }
 
+// SortedClone creates a copy with sorted CidrBlocks array for comparing and sorting.
 func (sgr *SecurityGroupRule) SortedClone() *SecurityGroupRule {
 	copy := sgr.Clone()
 	sort.Strings(copy.CidrBlocks)
 	return copy
 }
 
+// LessThan compares to another securitry group role for ordering.
 func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
 	if sgr.Type < other.Type {
 		return true
@@ -348,12 +362,14 @@ func (sgr *SecurityGroupRule) LessThan(other *SecurityGroupRule) bool {
 	return false
 }
 
+// InternetGateway contains the relevant fields for an EC2 internet gateway resource.
 type InternetGateway struct {
 	Tags
 	InternetGatewayId string
 	VpcId             *string
 }
 
+// VpcEndpoint contains the relevant fields for an EC2 VPC endpoint resource.
 type VpcEndpoint struct {
 	Tags
 	VpcEndpointId string
@@ -361,6 +377,8 @@ type VpcEndpoint struct {
 	ServiceName   string
 }
 
+// RouteTable contains the relevant fields for an EC2 route table resource.
+// Routes and Associations are filled for returned values, but ignored on creation.
 type RouteTable struct {
 	Tags
 	RouteTableId string
@@ -369,12 +387,14 @@ type RouteTable struct {
 	Associations []*RouteTableAssociation
 }
 
+// Route contains the relevant fields for a route of an EC2 route table resource.
 type Route struct {
 	DestinationCidrBlock string
 	GatewayId            *string
 	NatGatewayId         *string
 }
 
+// RouteTableAssociation contains the relevant fields for a route association of an EC2 route table resource.
 type RouteTableAssociation struct {
 	RouteTableAssociationId string
 	Main                    bool
@@ -382,6 +402,7 @@ type RouteTableAssociation struct {
 	SubnetId                *string
 }
 
+// Subnet contains the relevant fields for an EC2 subnet resource.
 type Subnet struct {
 	Tags
 	SubnetId         string
@@ -390,12 +411,14 @@ type Subnet struct {
 	AvailabilityZone string
 }
 
+// Clone creates a copy.
 func (s *Subnet) Clone() *Subnet {
 	copy := *s
 	copy.Tags = s.Tags.Clone()
 	return &copy
 }
 
+// ElasticIP contains the relevant fields for an EC2 elastic IP resource.
 type ElasticIP struct {
 	Tags
 	AllocationId string
@@ -403,6 +426,7 @@ type ElasticIP struct {
 	Vpc          bool
 }
 
+// NATGateway contains the relevant fields for an EC2 NAT gateway resource.
 type NATGateway struct {
 	Tags
 	NATGatewayId    string
@@ -412,12 +436,14 @@ type NATGateway struct {
 	State           string
 }
 
+// KeyPairInfo contains the relevant fields for an EC2 key pair.
 type KeyPairInfo struct {
 	Tags
 	KeyName        string
 	KeyFingerprint string
 }
 
+// IAMRole contains the relevant fields for an IAM role resource.
 type IAMRole struct {
 	RoleId                   string
 	RoleName                 string
@@ -426,6 +452,7 @@ type IAMRole struct {
 	ARN                      string
 }
 
+// IAMInstanceProfile contains the relevant fields for an IAM instance profile resource.
 type IAMInstanceProfile struct {
 	InstanceProfileId   string
 	InstanceProfileName string
@@ -433,6 +460,7 @@ type IAMInstanceProfile struct {
 	RoleName            string
 }
 
+// IAMRolePolicy contains the relevant fields for an IAM role policy resource.
 type IAMRolePolicy struct {
 	PolicyName     string
 	RoleName       string

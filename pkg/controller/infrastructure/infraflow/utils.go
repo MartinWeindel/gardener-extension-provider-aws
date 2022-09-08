@@ -142,7 +142,7 @@ func (w *waiter) run() {
 		case <-w.done:
 			return
 		case <-ticker.C:
-			delta := int(time.Now().Sub(w.start).Seconds())
+			delta := int(time.Since(w.start).Seconds())
 			w.log.Info(fmt.Sprintf("%s [%ds]", w.message.Load(), delta), w.keysAndValues...)
 		}
 	}

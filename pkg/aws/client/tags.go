@@ -24,8 +24,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 )
 
+// Tags is map of string key to string values. Duplicate keys are not supported in AWS.
 type Tags map[string]string
 
+// FromTags creates a Tags map from the given EC2 tag array.
 func FromTags(ec2Tags []*ec2.Tag) Tags {
 	tags := Tags{}
 	for _, et := range ec2Tags {
@@ -34,6 +36,7 @@ func FromTags(ec2Tags []*ec2.Tag) Tags {
 	return tags
 }
 
+// ToTagSpecification exports the tags map as a EC2 TagSpecification for the given resource type.
 func (tags Tags) ToTagSpecification(resourceType string) *ec2.TagSpecification {
 	tagspec := &ec2.TagSpecification{
 		ResourceType: aws.String(resourceType),
@@ -44,6 +47,7 @@ func (tags Tags) ToTagSpecification(resourceType string) *ec2.TagSpecification {
 	return tagspec
 }
 
+// ToTagSpecifications exports the tags map as a EC2 TagSpecification array for the given resource type.
 func (tags Tags) ToTagSpecifications(resourceType string) []*ec2.TagSpecification {
 	if tags == nil {
 		return nil
@@ -51,6 +55,7 @@ func (tags Tags) ToTagSpecifications(resourceType string) []*ec2.TagSpecificatio
 	return []*ec2.TagSpecification{tags.ToTagSpecification(resourceType)}
 }
 
+// ToEC2Tags exports the tags map as a EC2 Tag array.
 func (tags Tags) ToEC2Tags() []*ec2.Tag {
 	var copy []*ec2.Tag
 	for k, v := range tags {
@@ -59,6 +64,7 @@ func (tags Tags) ToEC2Tags() []*ec2.Tag {
 	return copy
 }
 
+// ToFilters exports the tags map as a EC2 Filter array.
 func (tags Tags) ToFilters() []*ec2.Filter {
 	if tags == nil {
 		return nil
@@ -70,6 +76,7 @@ func (tags Tags) ToFilters() []*ec2.Filter {
 	return filters
 }
 
+// Clone creates a copy of the tags aps
 func (tags Tags) Clone() Tags {
 	copy := Tags{}
 	for k, v := range tags {

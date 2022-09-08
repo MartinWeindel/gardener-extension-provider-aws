@@ -19,8 +19,5 @@ package client
 
 func copyArray[T any](array []T) []T {
 	var copy []T
-	for _, t := range array {
-		copy = append(copy, t)
-	}
-	return copy
+	return append(copy, array...)
 }

@@ -41,6 +41,7 @@ const (
 	defaultLongTimeout = 3 * time.Minute
 )
 
+// Reconcile creates and runs the flow to reconcile the AWS infrastructure.
 func (c *FlowContext) Reconcile(ctx context.Context) error {
 	g := c.buildReconcileGraph()
 	f := g.Compile()
@@ -475,7 +476,7 @@ func (c *FlowContext) ensureNodesSecurityGroup(ctx context.Context) error {
 func (c *FlowContext) ensureZones(ctx context.Context) error {
 	var desired []*awsclient.Subnet
 	for _, zone := range c.config.Networks.Zones {
-		helper := c.subnetSuffixHelper(zone.Name)
+		helper := c.zoneSuffixHelpers(zone.Name)
 		tagsWorkers := c.commonTagsWithSuffix(helper.GetSuffixSubnetWorkers())
 		tagsPublic := c.commonTagsWithSuffix(helper.GetSuffixSubnetPublic())
 		tagsPublic[TagKeyRolePublicELB] = TagValueUse
@@ -515,7 +516,9 @@ func (c *FlowContext) ensureZones(ctx context.Context) error {
 
 	g := flow.NewGraph("AWS infrastructure reconcilation: zones")
 
-	c.addZoneDeletionTasksBySubnets(g, toBeDeleted)
+	if err := c.addZoneDeletionTasksBySubnets(g, toBeDeleted); err != nil {
+		return err
+	}
 
 	dependencies := newZoneDependencies()
 	for _, item := range toBeCreated {
@@ -543,7 +546,7 @@ func (c *FlowContext) ensureZones(ctx context.Context) error {
 	return nil
 }
 
-func (c *FlowContext) addZoneDeletionTasksBySubnets(g *flow.Graph, toBeDeleted []*awsclient.Subnet) {
+func (c *FlowContext) addZoneDeletionTasksBySubnets(g *flow.Graph, toBeDeleted []*awsclient.Subnet) error {
 	toBeDeletedZones := sets.NewString()
 	for _, item := range toBeDeleted {
 		toBeDeletedZones.Insert(getZoneName(item))
@@ -554,8 +557,11 @@ func (c *FlowContext) addZoneDeletionTasksBySubnets(g *flow.Graph, toBeDeleted [
 		dependencies.Append(zoneName, taskID)
 	}
 	for _, item := range toBeDeleted {
-		c.addSubnetDeletionTasks(g, item, dependencies.Get(item.AvailabilityZone))
+		if err := c.addSubnetDeletionTasks(g, item, dependencies.Get(item.AvailabilityZone)); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (c *FlowContext) collectExistingSubnets(ctx context.Context) ([]*awsclient.Subnet, error) {
@@ -706,7 +712,7 @@ func (c *FlowContext) ensureElasticIP(zone *aws.Zone) flow.TaskFn {
 			return nil
 		}
 		log := c.LogFromContext(ctx)
-		helper := c.subnetSuffixHelper(zone.Name)
+		helper := c.zoneSuffixHelpers(zone.Name)
 		child := c.getSubnetZoneChild(zone.Name)
 		id := child.Get(IdentifierZoneNATGWElasticIP)
 		desired := &awsclient.ElasticIP{
@@ -742,7 +748,7 @@ func (c *FlowContext) deleteElasticIP(zoneName string) flow.TaskFn {
 		if child.IsAlreadyDeleted(IdentifierZoneNATGWElasticIP) {
 			return nil
 		}
-		helper := c.subnetSuffixHelper(zoneName)
+		helper := c.zoneSuffixHelpers(zoneName)
 		tags := c.commonTagsWithSuffix(helper.GetSuffixElasticIP())
 		current, err := findExisting(ctx, child.Get(IdentifierZoneNATGWElasticIP), tags, c.client.GetElasticIP, c.client.FindElasticIPsByTags)
 		if err != nil {
@@ -767,7 +773,7 @@ func (c *FlowContext) ensureNATGateway(zone *aws.Zone) flow.TaskFn {
 	return func(ctx context.Context) error {
 		log := c.LogFromContext(ctx)
 		child := c.getSubnetZoneChild(zone.Name)
-		helper := c.subnetSuffixHelper(zone.Name)
+		helper := c.zoneSuffixHelpers(zone.Name)
 		desired := &awsclient.NATGateway{
 			Tags:     c.commonTagsWithSuffix(helper.GetSuffixNATGateway()),
 			SubnetId: *child.Get(IdentifierZoneSubnetPublic),
@@ -820,7 +826,7 @@ func (c *FlowContext) deleteNATGateway(zoneName string) flow.TaskFn {
 			return nil
 		}
 		log := c.LogFromContext(ctx)
-		helper := c.subnetSuffixHelper(zoneName)
+		helper := c.zoneSuffixHelpers(zoneName)
 		tags := c.commonTagsWithSuffix(helper.GetSuffixNATGateway())
 		current, err := findExisting(ctx, child.Get(IdentifierZoneNATGateway), tags, c.client.GetNATGateway, c.client.FindNATGatewaysByTags,
 			func(item *awsclient.NATGateway) bool {
@@ -1220,7 +1226,7 @@ func (c *FlowContext) getSubnetKey(item *awsclient.Subnet) (zoneName, subnetKey 
 		}
 		if item.Tags != nil && item.Tags[TagKeyName] != "" {
 			value := item.Tags[TagKeyName]
-			helper := c.subnetSuffixHelper(zone.Name)
+			helper := c.zoneSuffixHelpers(zone.Name)
 			for _, key := range []string{IdentifierZoneSubnetWorkers, IdentifierZoneSubnetPublic, IdentifierZoneSubnetPrivate} {
 				switch key {
 				case IdentifierZoneSubnetWorkers:

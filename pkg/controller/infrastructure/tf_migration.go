@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones []awsapi.Zone) (*awsapi.FlowState, error) {
+func migrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones []awsapi.Zone) (*awsapi.FlowState, error) {
 	var (
 		tfRawState *terraformer.RawState
 		tfState    *shared.TerraformState
@@ -46,7 +46,7 @@ func MigrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 		return flowState, nil
 	}
 
-	if tfRawState, err = GetTerraformerRawState(rawExtension); err != nil {
+	if tfRawState, err = getTerraformerRawState(rawExtension); err != nil {
 		return nil, err
 	}
 	var data []byte
@@ -142,7 +142,7 @@ func setFlowStateData(state *awsapi.FlowState, key string, id *string) {
 	}
 }
 
-func GetTerraformerRawState(state *runtime.RawExtension) (*terraformer.RawState, error) {
+func getTerraformerRawState(state *runtime.RawExtension) (*terraformer.RawState, error) {
 	if state == nil {
 		return nil, nil
 	}

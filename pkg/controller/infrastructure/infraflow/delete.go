@@ -29,6 +29,7 @@ import (
 	. "github.com/gardener/gardener-extension-provider-aws/pkg/controller/infrastructure/infraflow/shared"
 )
 
+// Delete creates and runs the flow to delete the AWS infrastructure.
 func (c *FlowContext) Delete(ctx context.Context) error {
 	g := c.buildDeleteGraph()
 	f := g.Compile()
@@ -110,6 +111,7 @@ func (c *FlowContext) deleteKubernetesLoadBalancersAndSecurityGroups(ctx context
 	return nil
 }
 
+// DestroyKubernetesLoadBalancersAndSecurityGroups tries to delete orphaned load balancers and security groups.
 func DestroyKubernetesLoadBalancersAndSecurityGroups(ctx context.Context, awsClient awsclient.Interface, vpcID, clusterName string) error {
 	for _, v := range []struct {
 		listFn   func(context.Context, string, string) ([]string, error)
@@ -275,7 +277,9 @@ func (c *FlowContext) deleteZones(ctx context.Context) error {
 		return err
 	}
 	g := flow.NewGraph("AWS infrastructure destruction: zones")
-	c.addZoneDeletionTasksBySubnets(g, current)
+	if err := c.addZoneDeletionTasksBySubnets(g, current); err != nil {
+		return err
+	}
 	f := g.Compile()
 	if err := f.Run(ctx, flow.Opts{Log: c.Log}); err != nil {
 		return flow.Causes(err)

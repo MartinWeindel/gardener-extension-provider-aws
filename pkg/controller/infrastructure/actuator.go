@@ -31,6 +31,7 @@ import (
 )
 
 const (
+	// AnnotationKeyUseFlow is the annotation key used to enable reconciliation with flow instead of terraformer.
 	AnnotationKeyUseFlow = "aws.provider.extensions.gardener.cloud/use-flow"
 )
 

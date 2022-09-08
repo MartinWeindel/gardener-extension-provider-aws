@@ -27,6 +27,7 @@ import (
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
 )
 
+// Updater provides methods to update selected AWS client objects.
 type Updater interface {
 	UpdateVpc(ctx context.Context, desired, current *VPC) (*VPC, error)
 	UpdateSecurityGroup(ctx context.Context, desired, current *SecurityGroup) (*SecurityGroup, error)
@@ -41,6 +42,7 @@ type updater struct {
 	ignoreTags *awsapi.IgnoreTags
 }
 
+// NewUpdater creates a new updater instance.
 func NewUpdater(client Interface, ignoreTags *awsapi.IgnoreTags) Updater {
 	return &updater{
 		client:     client,
@@ -133,10 +135,7 @@ outerCreate:
 		}
 	}
 	updated := *current
-	updated.Routes = nil
-	for _, dr := range desired.Routes {
-		updated.Routes = append(updated.Routes, dr)
-	}
+	updated.Routes = append(updated.Routes, desired.Routes...)
 	return &updated, nil
 }
 
@@ -200,8 +199,6 @@ func (u *updater) UpdateEC2Tags(ctx context.Context, id string, desired, current
 			updated[k] = v
 		}
 		return updated, nil
-	} else {
-		return desired, nil
 	}
 
 	return desired.Clone(), nil

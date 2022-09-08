@@ -36,6 +36,9 @@ const (
 // FlatMap is a semantic name for string map used for importing and exporting
 type FlatMap map[string]string
 
+// Whiteboard is a hierarchical key/value store for the internal state.
+// It is safe to be used concurrently.
+// Additionally, it can cache objects for use in subsequent flow task.
 type Whiteboard interface {
 	IsEmpty() bool
 
@@ -82,6 +85,7 @@ type whiteboard struct {
 
 var _ Whiteboard = &whiteboard{}
 
+// NewWhiteboard creates an empty whiteboard.
 func NewWhiteboard() Whiteboard {
 	return newWhiteboard(&atomic.Int64{})
 }
@@ -267,6 +271,7 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// IsValidValue returns true if an exported value is valid, i.e. not empty and not special value for deleted.
 func IsValidValue(value string) bool {
 	return value != "" && value != deleted
 }

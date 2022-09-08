@@ -130,8 +130,8 @@ func (c *configValidator) validateVPC(ctx context.Context, awsClient awsclient.I
 
 // validateEIP validates if the given elastic IP exists and can be associated by the Shoot's NAT gateway
 // An EIP can be associated with the Shoot when
-//  - it is not associated yet (new)
-//  - it is already associated to any Gardener-created NAT Gateway of the Shoot cluster (identified by tag `kubernetes.io/cluster/<shoot-name>`)
+//   - it is not associated yet (new)
+//   - it is already associated to any Gardener-created NAT Gateway of the Shoot cluster (identified by tag `kubernetes.io/cluster/<shoot-name>`)
 func (c *configValidator) validateEIPS(ctx context.Context, awsClient awsclient.Interface, shootNamespace string, elasticIPAllocationIDs []string, elasticIPAllocationIDToZone map[string]string, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
