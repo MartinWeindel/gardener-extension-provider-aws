@@ -73,9 +73,9 @@ type StateExporter interface {
 }
 
 // NewBasicFlowContext creates a new `BasicFlowContext`.
-func NewBasicFlowContext(logger logr.Logger, exporter StateExporter, persistor FlowStatePersistor) *BasicFlowContext {
+func NewBasicFlowContext(log logr.Logger, exporter StateExporter, persistor FlowStatePersistor) *BasicFlowContext {
 	flowContext := &BasicFlowContext{
-		Log:                logger,
+		Log:                log,
 		exporter:           exporter,
 		flowStatePersistor: persistor,
 		PersistInterval:    10 * time.Second,

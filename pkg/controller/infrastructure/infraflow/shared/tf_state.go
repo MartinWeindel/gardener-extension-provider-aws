@@ -18,8 +18,11 @@
 package shared
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+
+	"github.com/gardener/gardener/extensions/pkg/terraformer"
 )
 
 const (
@@ -73,6 +76,30 @@ func LoadTerraformStateFromConfigMapData(data map[string]string) (*TerraformStat
 	}
 
 	return UnmarshalTerraformState([]byte(content))
+}
+
+func UnmarshalTerraformStateFromTerraformer(state *terraformer.RawState) (*TerraformState, error) {
+	var (
+		tfState *TerraformState
+		err     error
+		data    []byte
+	)
+
+	switch state.Encoding {
+	case "base64":
+		data, err = base64.StdEncoding.DecodeString(state.Data)
+		if err != nil {
+			return nil, fmt.Errorf("could not decode terraform raw state data: %w", err)
+		}
+	case "none":
+		data = []byte(state.Data)
+	default:
+		return nil, fmt.Errorf("unknown encoding of Terraformer raw state: %s", state.Encoding)
+	}
+	if tfState, err = UnmarshalTerraformState(data); err != nil {
+		return nil, fmt.Errorf("could not decode terraform state: %w", err)
+	}
+	return tfState, nil
 }
 
 // UnmarshalTerraformState unmarshalls the terraformer state from a byte array.

@@ -18,7 +18,6 @@
 package infrastructure
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -49,20 +48,8 @@ func migrateTerraformStateToFlowState(rawExtension *runtime.RawExtension, zones 
 	if tfRawState, err = getTerraformerRawState(rawExtension); err != nil {
 		return nil, err
 	}
-	var data []byte
-	switch tfRawState.Encoding {
-	case "base64":
-		data, err = base64.StdEncoding.DecodeString(tfRawState.Data)
-		if err != nil {
-			return nil, fmt.Errorf("could not decode terraform raw state data: %w", err)
-		}
-	case "none":
-		data = []byte(tfRawState.Data)
-	default:
-		return nil, fmt.Errorf("unknown encoding of Terraformer raw state: %s", tfRawState.Encoding)
-	}
-	if tfState, err = shared.UnmarshalTerraformState(data); err != nil {
-		return nil, fmt.Errorf("could not decode terraform state: %w", err)
+	if tfState, err = shared.UnmarshalTerraformStateFromTerraformer(tfRawState); err != nil {
+		return nil, err
 	}
 
 	if tfState.Outputs == nil {
