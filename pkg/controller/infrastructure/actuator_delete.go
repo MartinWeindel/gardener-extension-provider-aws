@@ -17,7 +17,6 @@ package infrastructure
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	awsapi "github.com/gardener/gardener-extension-provider-aws/pkg/apis/aws"
@@ -42,13 +41,6 @@ func (a *actuator) Delete(ctx context.Context, log logr.Logger, infrastructure *
 		return err
 	}
 	if flowState != nil {
-		return a.deleteWithFlow(ctx, log, infrastructure, cluster, flowState)
-	}
-	if infrastructure.Annotations != nil && strings.EqualFold(infrastructure.Annotations[AnnotationKeyUseFlow], "true") {
-		flowState, err = a.migrateFromTerraformerState(ctx, log, infrastructure)
-		if err != nil {
-			return err
-		}
 		return a.deleteWithFlow(ctx, log, infrastructure, cluster, flowState)
 	}
 
