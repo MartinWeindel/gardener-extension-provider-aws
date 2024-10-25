@@ -97,3 +97,5 @@ gardener:
       settings:
         topologyAwareRouting:
           enabled: false
+  priorityClassName: gardener-system-900
+# extensionClassName: garden

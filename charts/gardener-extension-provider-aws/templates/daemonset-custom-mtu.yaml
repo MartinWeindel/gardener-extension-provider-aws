@@ -1,4 +1,4 @@
-{{ if eq .Values.gardener.seed.provider "aws" }}
+{{ if and (eq .Values.gardener.seed.provider "aws") (ne .Values.gardener.extensionClassName "garden") }}
 kind: DaemonSet
 apiVersion: apps/v1
 metadata:
@@ -17,7 +17,7 @@ spec:
       labels:
         k8s-app: mtu-customizer
     spec:
-      priorityClassName: gardener-system-900
+      priorityClassName: {{ .Values.gardener.priorityClassName }}
       hostNetwork: true
       tolerations:
         - effect: NoSchedule

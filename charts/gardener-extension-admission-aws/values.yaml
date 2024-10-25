@@ -33,3 +33,12 @@ global:
   service:
     topologyAwareRouting:
       enabled: false
+
+gardener:
+# garden: true
+  virtualCluster:
+    serviceAccount:
+#     name: extension-admission-provider-aws
+#     namespace: kube-system
+  runtimeCluster:
+#   priorityClassName: gardener-garden-system-400

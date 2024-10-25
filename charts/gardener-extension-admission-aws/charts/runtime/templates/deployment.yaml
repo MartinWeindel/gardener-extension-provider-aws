@@ -45,6 +45,9 @@ spec:
         - --webhook-config-mode=service
         {{- end }}
         - --webhook-config-namespace={{ .Release.Namespace }}
+        {{- if .Values.gardener.virtualCluster.namespace }}
+        - --webhook-config-owner-namespace={{ .Values.gardener.virtualCluster.namespace }}
+        {{- end }}
         {{- if .Values.global.kubeconfig }}
         - --kubeconfig=/etc/gardener-extension-admission-aws/kubeconfig/kubeconfig
         {{- end }}
@@ -53,6 +56,9 @@ spec:
         {{- end }}
         {{- if .Values.global.metricsPort }}
         - --metrics-bind-address=:{{ .Values.global.metricsPort }}
+        {{- end }}
+        {{- if .Values.gardener.garden }}
+        - --disable-webhooks=validator,mutator
         {{- end }}
         - --health-bind-address=:{{ .Values.global.healthPort }}
         - --leader-election-id={{ include "leaderelectionid" . }}

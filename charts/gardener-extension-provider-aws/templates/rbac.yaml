@@ -50,7 +50,8 @@ rules:
   - leases
   resourceNames:
   - provider-aws-leader-election
-  - gardener-extension-heartbeat 
+  - gardener-extension-heartbeat
+  - gardener-extension-provider-aws
   verbs:
   - get
   - update

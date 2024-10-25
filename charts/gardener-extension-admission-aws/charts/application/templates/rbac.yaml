@@ -21,6 +21,10 @@ rules:
   - secrets
   verbs:
   - get
+  - list
+  - create
+  - patch
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -41,6 +45,30 @@ rules:
   - watch
   - patch
   - update
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  resourceNames:
+  - {{ include "name" . }}
+  verbs:
+  - get
+  - watch
+  - update
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -57,6 +85,10 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: User
   name: {{ .Values.global.virtualGarden.user.name  }}
+{{- else if (and .Values.gardener.virtualCluster.serviceAccount .Values.gardener.virtualCluster.serviceAccount.name) }}
+- kind: ServiceAccount
+  name: {{ required ".Values.gardener.virtualCluster.serviceAccount.name is required" .Values.gardener.virtualCluster.serviceAccount.name }}
+  namespace: {{ required ".Values.gardener.virtualCluster.serviceAccount.namespace is required" .Values.gardener.virtualCluster.serviceAccount.namespace }}
 {{- else }}
 - kind: ServiceAccount
   name: {{ include "name" . }}
