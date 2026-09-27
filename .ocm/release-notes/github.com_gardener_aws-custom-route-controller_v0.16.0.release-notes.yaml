@@ -1,0 +1,15 @@
+ocm:
+  component_name: github.com/gardener/aws-custom-route-controller
+  component_version: v0.16.0
+release_notes:
+- audience: user
+  author:
+    hostname: github.com
+    type: githubUser
+    username: shreyas-s-rao
+  category: feature
+  contents: Support VPC route creation for instances with multiple network interfaces
+    (EFA-enabled GPU instances)
+  mimetype: text/markdown
+  reference: '[#484](https://github.com/gardener/aws-custom-route-controller/pull/484)'
+  type: standard
